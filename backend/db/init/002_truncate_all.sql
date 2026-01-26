@@ -1,0 +1,8 @@
+BEGIN;
+
+TRUNCATE TABLE
+  bookings,
+  items
+RESTART IDENTITY CASCADE;
+
+COMMIT;
