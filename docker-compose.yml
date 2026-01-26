@@ -1,0 +1,16 @@
+services:
+  db:
+    image: postgres:16
+    container_name: yardly-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: yardly
+      POSTGRES_USER: yardly
+      POSTGRES_PASSWORD: yardly
+    ports:
+      - "55432:5432"
+    volumes:
+      - yardly_db:/var/lib/postgresql/data
+      - ./backend/db/init:/docker-entrypoint-initdb.d
+volumes:
+  yardly_db:
