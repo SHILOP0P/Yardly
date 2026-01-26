@@ -12,6 +12,8 @@ func RegisterRoutes(mux *http.ServeMux, repo Repo, items ItemGetter, authMw Midd
 	mux.Handle("POST /api/items/{id}/bookings", authMw(http.HandlerFunc(h.CreateRent)))
 	mux.HandleFunc("GET /api/items/{id}/bookings", h.ListBusyForItem)
 
+	mux.Handle("GET /api/my/bookings", authMw(http.HandlerFunc(h.ListMyBookings)))
+
 	mux.Handle("POST /api/bookings/{id}/approve", authMw(http.HandlerFunc(h.Approve)))
 	mux.Handle("POST /api/bookings/{id}/return", authMw(http.HandlerFunc(h.Return)))
 	mux.Handle("POST /api/bookings/{id}/handover", authMw(http.HandlerFunc(h.Handover)))

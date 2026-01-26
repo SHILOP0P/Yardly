@@ -364,6 +364,75 @@ func (r *Repo) CancelRent(ctx context.Context, bookingID, requesterID int64)(boo
 	return out, nil
 }
 
+func(r *Repo) ListMyBookings(ctx context.Context, requesterID int64, statuses[]booking.Status, limit, offset int)([]booking.Booking, error){
+	if limit<=0{
+		limit = 20
+	}
+	if limit>100{
+		limit = 100
+	}
+	if offset <0{
+		offset = 0
+	}
+	st := make([]string, 0, len(statuses))
+	for _, s:= range statuses{
+		st = append(st, string(s))
+	}
+
+	const base = `
+	SELECT
+	id, item_id, requester_id, owner_id,
+	type, status,
+	start_at, end_at,
+	handover_deadline,
+	created_at
+	FROM bookings
+	WHERE requester_id = $1
+	`
+	var rows pgx.Rows
+	var err error
+
+	if len(st) == 0{
+		const q = base+`ORDER BY created_at DESC, id DESC
+		LIMIT $2 OFFSET $3
+		`
+		rows, err = r.pool.Query(ctx, q, requesterID, limit, offset)
+	} else{
+		const q = base + `
+			AND status = ANY($2::text[])
+			ORDER BY created_at DESC, id DESC
+			LIMIT $3 OFFSET $4
+			`
+		rows, err = r.pool.Query(ctx, q, requesterID, st, limit, offset)
+	}
+	if err != nil{
+		return nil, fmt.Errorf("bookings pgrepo: list my bookings: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]booking.Booking, 0, limit)
+	for rows.Next(){
+		var b booking.Booking
+		if err:=rows.Scan(
+			&b.ID,
+			&b.ItemID,
+			&b.RequesterID,
+			&b.OwnerID,
+			&b.Type,
+			&b.Status,
+			&b.Start,
+			&b.End,
+			&b.HandoverDeadline,
+			&b.CreatedAt,); err != nil {
+			return nil, fmt.Errorf("bookings pgrepo: list my bookings scan: %w", err)
+		}
+		out = append(out, b)
+	}
+	if err := rows.Err(); err != nil{
+		return nil, fmt.Errorf("bookings pgrepo: list my bookings rows: %w", err)
+	}
+	return out, nil
+}
 
 
 

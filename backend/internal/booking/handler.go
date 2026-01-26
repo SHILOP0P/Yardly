@@ -2,16 +2,17 @@ package booking
 
 import (
 	"encoding/json"
+	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
-	"log"
-	"errors"
 
 	"context"
-	"github.com/SHILOP0P/Yardly/backend/internal/item"
+
 	"github.com/SHILOP0P/Yardly/backend/internal/auth"
 	"github.com/SHILOP0P/Yardly/backend/internal/httpx"
+	"github.com/SHILOP0P/Yardly/backend/internal/item"
 )
 
 type Handler struct{
@@ -219,6 +220,53 @@ func (h *Handler) Cancel(w http.ResponseWriter, r *http.Request){
 }
 
 
+func (h *Handler) ListMyBookings(w http.ResponseWriter, r *http.Request){
+	requesterID, ok := auth.UserIDFromContext(r.Context())
+	if !ok{
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	q:= r.URL.Query()
+
+	limit:= 20
+	if v := q.Get("limit"); v!=""{
+		n, err := strconv.Atoi(v)
+		if err!= nil||n<=0{
+			httpx.WriteError(w, http.StatusBadRequest, "invalid limit")
+			return
+		}
+		if n>100{
+			n =100
+		}
+		limit = n
+	}
+
+	offset:=0
+	if v:=q.Get("offset"); v!=""{
+		n, err := strconv.Atoi(v)
+		if err!= nil||n<0{
+			httpx.WriteError(w, http.StatusBadRequest, "invalid offset")
+			return
+		}
+		offset = n
+	}
+	
+	statuses, err := parseStatuses(q["status"])
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	out, err := h.repo.ListMyBookings(r.Context(), requesterID,statuses,limit,offset)
+	if err!= nil{
+		log.Println("list my bookings error:", err)
+		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, out)
+}
+
 
 
 func writeBookingError(w http.ResponseWriter, op string, err error) {
@@ -233,4 +281,30 @@ func writeBookingError(w http.ResponseWriter, op string, err error) {
 		log.Println(op, "error:", err)
 		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
 	}
+}
+
+
+func parseStatuses(values []string)([]Status, error){
+	if len(values) == 0{
+		return nil, nil
+	}
+
+	out := make([]Status, 0, len(values))
+	for _, v := range values{
+		switch Status(v){
+			case StatusRequested,
+			StatusApproved,
+			StatusHandoverPending,
+			StatusInUse,
+			StatusReturnPending,
+			StatusCompleted,
+			StatusDeclined,
+			StatusCanceled,
+			StatusExpired:
+			out = append(out, Status(v))
+		default:
+			return nil, errors.New("invalid status: " + v)
+		}
+	}
+	return out, nil
 }
