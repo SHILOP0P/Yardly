@@ -4,17 +4,18 @@ import (
 	"context"
 	"log"
 	"os"
+	"strconv"
 	"time"
-    "strconv"
 
 	"github.com/joho/godotenv"
 
 	"github.com/SHILOP0P/Yardly/backend/internal/app/httpserver"
+	"github.com/SHILOP0P/Yardly/backend/internal/auth"
+	"github.com/SHILOP0P/Yardly/backend/internal/booking/pgrepo"
 	bookingpg "github.com/SHILOP0P/Yardly/backend/internal/booking/pgrepo"
-    itempg "github.com/SHILOP0P/Yardly/backend/internal/item/pgrepo"
-    userpg "github.com/SHILOP0P/Yardly/backend/internal/user/pgrepo"
 	"github.com/SHILOP0P/Yardly/backend/internal/db"
-    "github.com/SHILOP0P/Yardly/backend/internal/auth"
+	itempg "github.com/SHILOP0P/Yardly/backend/internal/item/pgrepo"
+	userpg "github.com/SHILOP0P/Yardly/backend/internal/user/pgrepo"
 )
 
 func main() {
@@ -52,8 +53,9 @@ func main() {
     }
     defer pool.Close()
 
+    eventRepo :=pgrepo.NewEventRepo()
     // 🔹 СОЗДАЁМ REPO ЗДЕСЬ (composition root)
-    bookingRepo := bookingpg.New(pool)
+    bookingRepo := bookingpg.New(pool, eventRepo)
     itemRepo:= itempg.New(pool)
     userRepo :=userpg.New(pool)
 
