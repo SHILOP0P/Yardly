@@ -21,6 +21,43 @@ func New(pool *pgxpool.Pool) *Repo {
 	return &Repo{pool: pool}
 }
 
+const selectBookingCols = `
+	id, item_id, requester_id, owner_id,
+	type, status,
+	start_at, end_at,
+	handover_deadline,
+	handover_confirmed_by_owner_at,
+	handover_confirmed_by_requester_at,
+	return_confirmed_by_owner_at,
+	return_confirmed_by_requester_at,
+	created_at
+`
+
+type rowScanrer interface{
+	Scan(dest ...any) error
+}
+
+func scanBooking(rs rowScanrer, b *booking.Booking)error{
+	return rs.Scan(
+		&b.ID,
+		&b.ItemID,
+		&b.RequesterID,
+		&b.OwnerID,
+		&b.Type,
+		&b.Status,
+		&b.Start,
+		&b.End,
+		&b.HandoverDeadline,
+		&b.HandoverConfirmedByOwnerAt,
+		&b.HandoverConfirmedByRequesterAt,
+		&b.ReturnConfirmedByOwnerAt,
+		&b.ReturnConfirmedByRequesterAt,
+		&b.CreatedAt,
+	)
+}
+
+
+
 func (r *Repo) Create(ctx context.Context, b *booking.Booking) error {
 	// created_at ставится DEFAULT now() в таблице
 	const q = `
@@ -59,28 +96,27 @@ RETURNING id, created_at
 }
 
 func (r *Repo) GetByID(ctx context.Context, id int64) (booking.Booking, error) {
-	const q = `
-SELECT
-	id, item_id, requester_id, owner_id,
-	type, status,
-	start_at, end_at,
-	handover_deadline,
-	created_at
+	q := `
+SELECT ` + selectBookingCols + `
 FROM bookings
 WHERE id = $1
 `
 	var b booking.Booking
 	err := r.pool.QueryRow(ctx, q, id).Scan(
 		&b.ID,
-		&b.ItemID,
-		&b.RequesterID,
-		&b.OwnerID,
-		&b.Type,
-		&b.Status,
-		&b.Start,
-		&b.End,
-		&b.HandoverDeadline,
-		&b.CreatedAt,
+    &b.ItemID,
+    &b.RequesterID,
+    &b.OwnerID,
+    &b.Type,
+    &b.Status,
+    &b.Start,
+    &b.End,
+    &b.HandoverDeadline,
+    &b.HandoverConfirmedByOwnerAt,
+    &b.HandoverConfirmedByRequesterAt,
+    &b.ReturnConfirmedByOwnerAt,
+    &b.ReturnConfirmedByRequesterAt,
+    &b.CreatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -93,12 +129,7 @@ WHERE id = $1
 
 func (r *Repo) ListByItem(ctx context.Context, itemID int64) ([]booking.Booking, error) {
 	const q = `
-SELECT
-	id, item_id, requester_id, owner_id,
-	type, status,
-	start_at, end_at,
-	handover_deadline,
-	created_at
+SELECT ` + selectBookingCols + `
 FROM bookings
 WHERE item_id = $1
 ORDER BY id DESC
@@ -114,15 +145,19 @@ ORDER BY id DESC
 		var b booking.Booking
 		if err := rows.Scan(
 			&b.ID,
-			&b.ItemID,
-			&b.RequesterID,
-			&b.OwnerID,
-			&b.Type,
-			&b.Status,
-			&b.Start,
-			&b.End,
-			&b.HandoverDeadline,
-			&b.CreatedAt,
+		&b.ItemID,
+		&b.RequesterID,
+		&b.OwnerID,
+		&b.Type,
+		&b.Status,
+		&b.Start,
+		&b.End,
+		&b.HandoverDeadline,
+		&b.HandoverConfirmedByOwnerAt,
+		&b.HandoverConfirmedByRequesterAt,
+		&b.ReturnConfirmedByOwnerAt,
+		&b.ReturnConfirmedByRequesterAt,
+		&b.CreatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("bookings pgrepo: list by item scan: %w", err)
 		}
@@ -143,12 +178,7 @@ func (r *Repo) ApproveRent(ctx context.Context, bookingID int64, ownerID int64)(
 	defer tx.Rollback(ctx)
 
 	const selectQ = `
-	SELECT
-		id, item_id, requester_id, owner_id,
-		type, status,
-		start_at, end_at,
-		handover_deadline,
-		created_at
+	SELECT ` + selectBookingCols + `
 	FROM bookings
 	WHERE id = $1
 	FOR UPDATE
@@ -164,6 +194,10 @@ func (r *Repo) ApproveRent(ctx context.Context, bookingID int64, ownerID int64)(
 		&b.Start,
 		&b.End,
 		&b.HandoverDeadline,
+		&b.HandoverConfirmedByOwnerAt,
+		&b.HandoverConfirmedByRequesterAt,
+		&b.ReturnConfirmedByOwnerAt,
+		&b.ReturnConfirmedByRequesterAt,
 		&b.CreatedAt,
 	)
 	if err != nil{
@@ -232,85 +266,203 @@ WHERE item_id = $2
 
 }
 
-func (r *Repo) ReturnRent(ctx context.Context, bookingID int64, ownerID int64)(booking.Booking, error){
-	const q = `
-UPDATE bookings
-SET status = $1
-WHERE id = $2
-  AND owner_id = $3
-  AND type = $4
-  AND status IN ($5, $6)
-RETURNING
-	id, item_id, requester_id, owner_id,
-	type, status,
-	start_at, end_at,
-	handover_deadline,
-	created_at
-`
+func (r *Repo) ReturnRent(ctx context.Context, bookingID int64, actorID int64, now time.Time)(booking.Booking, error){
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return booking.Booking{}, fmt.Errorf("bookings pgrepo: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	const selectQ = `
+	SELECT ` + selectBookingCols + `
+	FROM bookings
+	WHERE id = $1
+	FOR UPDATE
+	`
 	var b booking.Booking
-	err := r.pool.QueryRow(ctx, q,
-		booking.StatusCompleted,
-		bookingID,
-		ownerID,
-		booking.TypeRent,
-		booking.StatusInUse,
-		booking.StatusReturnPending,
-	).Scan(
-		&b.ID, &b.ItemID, &b.RequesterID, &b.OwnerID,
-		&b.Type, &b.Status,
-		&b.Start, &b.End,
+	err = tx.QueryRow(ctx, selectQ, bookingID).Scan(
+		&b.ID,
+		&b.ItemID,
+		&b.RequesterID,
+		&b.OwnerID,
+		&b.Type,
+		&b.Status,
+		&b.Start,
+		&b.End,
 		&b.HandoverDeadline,
+		&b.HandoverConfirmedByOwnerAt,
+		&b.HandoverConfirmedByRequesterAt,
+		&b.ReturnConfirmedByOwnerAt,
+		&b.ReturnConfirmedByRequesterAt,
 		&b.CreatedAt,
 	)
-	if err != nil {
+	if err != nil{
 		if errors.Is(err, pgx.ErrNoRows){
-			return booking.Booking{}, r.explainNoRows(ctx, bookingID, ownerID, booking.StatusInUse)
+			return booking.Booking{}, booking.ErrNotFound
 		}
-		return booking.Booking{}, fmt.Errorf("bookings pgrepo: return: %w", err)
+		return booking.Booking{}, fmt.Errorf("bookings pgrepo: return select: %w", err)
 	}
-	return b, nil
+	if b.Type != booking.TypeRent{
+		return booking.Booking{}, booking.ErrInvalidState
+	}
+	if actorID!=b.OwnerID&&actorID!=b.RequesterID{
+		return booking.Booking{}, booking.ErrForbidden
+	}
+	if actorID==b.OwnerID&&actorID==b.RequesterID{
+		return booking.Booking{}, booking.ErrInvalidState
+	}
+	if b.Status!=booking.StatusInUse&&b.Status!=booking.StatusReturnPending{
+		return booking.Booking{}, booking.ErrInvalidState
+	}
+	if actorID == b.OwnerID && b.ReturnConfirmedByOwnerAt == nil {
+		b.ReturnConfirmedByOwnerAt = &now
+	}
+	if actorID == b.RequesterID && b.ReturnConfirmedByRequesterAt == nil {
+		b.ReturnConfirmedByRequesterAt = &now
+	}
+
+	const updMarks = `
+	UPDATE bookings
+	SET return_confirmed_by_owner_at = $1,
+		return_confirmed_by_requester_at = $2
+	WHERE id = $3
+	RETURNING
+		return_confirmed_by_owner_at,
+		return_confirmed_by_requester_at,
+		status
+	`
+	err = tx.QueryRow(ctx, updMarks,
+		b.ReturnConfirmedByOwnerAt,
+		b.ReturnConfirmedByRequesterAt,
+		b.ID,
+	).Scan(&b.ReturnConfirmedByOwnerAt, &b.ReturnConfirmedByRequesterAt, &b.Status)
+	if err != nil {
+		return booking.Booking{}, fmt.Errorf("bookings pgrepo: return update marks: %w", err)
+	}
+
+	if b.ReturnConfirmedByOwnerAt != nil && b.ReturnConfirmedByRequesterAt != nil {
+		const updStatus = `
+		UPDATE bookings
+		SET status = $1
+		WHERE id = $2 AND status IN ($3, $4)
+		RETURNING status
+		`
+		err = tx.QueryRow(ctx, updStatus,
+			booking.StatusCompleted,
+			b.ID,
+			booking.StatusInUse,
+			booking.StatusReturnPending,
+		).Scan(&b.Status)
+		if err != nil {
+			return booking.Booking{}, fmt.Errorf("bookings pgrepo: return set status: %w", err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return booking.Booking{}, fmt.Errorf("bookings pgrepo: commit: %w", err)
+	}
+	return b, nil	
 }
 
-func (r *Repo) HandoverRent(ctx context.Context, bookingID int64, ownerID int64, now time.Time) (booking.Booking, error) {
+func (r *Repo) HandoverRent(ctx context.Context, bookingID int64, actorID int64, now time.Time) (booking.Booking, error) {
+	
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return booking.Booking{}, fmt.Errorf("bookings pgrepo: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+
 	// Если дедлайн прошёл — НЕ переводим в in_use.
 	// Это защищает инвариант "только в течение 24 часов".
-	const q = `
-UPDATE bookings
-SET status = $1
-WHERE id = $2
-  AND owner_id = $3
-  AND type = $4
-  AND status = $5
-  AND handover_deadline IS NOT NULL
-  AND $6 <= handover_deadline
-RETURNING
-	id, item_id, requester_id, owner_id,
-	type, status,
-	start_at, end_at,
-	handover_deadline,
-	created_at
-`
+	const selectQ = `
+	SELECT ` + selectBookingCols + `
+	FROM bookings
+	WHERE id = $1
+	FOR UPDATE
+	`
 	var b booking.Booking
-	err := r.pool.QueryRow(ctx, q,
-		booking.StatusInUse,
-		bookingID,
-		ownerID,
-		booking.TypeRent,
-		booking.StatusApproved,
-		now,
-	).Scan(
-		&b.ID, &b.ItemID, &b.RequesterID, &b.OwnerID,
-		&b.Type, &b.Status,
-		&b.Start, &b.End,
+	err = tx.QueryRow(ctx, selectQ, bookingID).Scan(
+		&b.ID,
+		&b.ItemID,
+		&b.RequesterID,
+		&b.OwnerID,
+		&b.Type,
+		&b.Status,
+		&b.Start,
+		&b.End,
 		&b.HandoverDeadline,
+		&b.HandoverConfirmedByOwnerAt,
+		&b.HandoverConfirmedByRequesterAt,
+		&b.ReturnConfirmedByOwnerAt,
+		&b.ReturnConfirmedByRequesterAt,
 		&b.CreatedAt,
 	)
 
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return booking.Booking{}, r.explainNoRows(ctx, bookingID, ownerID, booking.StatusApproved)
+			return booking.Booking{}, r.explainNoRows(ctx, bookingID, actorID, booking.StatusApproved)
 		}
 		return booking.Booking{}, fmt.Errorf("bookings pgrepo: handover: %w", err)
+	}
+	if b.Type!=booking.TypeRent{
+		return booking.Booking{}, booking.ErrInvalidState
+	}
+	if actorID!=b.OwnerID&&actorID!=b.RequesterID{
+		return booking.Booking{}, booking.ErrForbidden
+	}
+	if actorID==b.OwnerID&&actorID==b.RequesterID{
+		return booking.Booking{}, booking.ErrInvalidState
+	}
+	if b.Status!= booking.StatusApproved{
+		return booking.Booking{}, booking.ErrInvalidState
+	}
+	if b.HandoverDeadline == nil || now.After(*b.HandoverDeadline){
+		return booking.Booking{}, booking.ErrInvalidState
+	}
+	if actorID == b.OwnerID&&b.HandoverConfirmedByOwnerAt == nil{
+		b.HandoverConfirmedByOwnerAt = &now
+	}
+	if actorID == b.RequesterID && b.HandoverConfirmedByRequesterAt == nil {
+		b.HandoverConfirmedByRequesterAt = &now
+	}
+
+	const updMarks = `
+		UPDATE bookings
+		SET handover_confirmed_by_owner_at = $1,
+			handover_confirmed_by_requester_at = $2
+		WHERE id = $3
+		RETURNING
+			handover_confirmed_by_owner_at,
+			handover_confirmed_by_requester_at,
+			status
+		`
+	err = tx.QueryRow(ctx, updMarks,
+		b.HandoverConfirmedByOwnerAt,
+		b.HandoverConfirmedByRequesterAt,
+		b.ID,
+	).Scan(&b.HandoverConfirmedByOwnerAt, &b.HandoverConfirmedByRequesterAt, &b.Status)
+	if err != nil {
+		return booking.Booking{}, fmt.Errorf("bookings pgrepo: handover update marks: %w", err)
+	}
+	if b.HandoverConfirmedByOwnerAt != nil && b.HandoverConfirmedByRequesterAt != nil {
+		const updStatus = `
+			UPDATE bookings
+			SET status = $1
+			WHERE id = $2 AND status = $3
+			RETURNING status
+			`
+		err = tx.QueryRow(ctx, updStatus,
+			booking.StatusInUse,
+			b.ID,
+			booking.StatusApproved,
+		).Scan(&b.Status)
+		if err != nil {
+			return booking.Booking{}, fmt.Errorf("bookings pgrepo: handover set status: %w", err)
+		}
+	}
+	if err:=tx.Commit(ctx); err!=nil{
+		return booking.Booking{}, fmt.Errorf("bookings pgrepo: commit: %w", err)
 	}
 
 	return b, nil
@@ -342,19 +494,16 @@ func (r *Repo) CancelRent(ctx context.Context, bookingID, requesterID int64)(boo
 	UPDATE bookings
 	SET status = $3
 	WHERE id = $1 AND requester_id = $2 AND status = $4 AND type = $5
-	RETURNING id, item_id, requester_id, owner_id, type, status, start_at, end_at, handover_deadline, created_at
+	RETURNING`+ selectBookingCols + `
 	`
 	var out booking.Booking
-	err:=r.pool.QueryRow(ctx,q,
+	err:=scanBooking(r.pool.QueryRow(ctx,q,
 	bookingID,
 		requesterID,
 		booking.StatusCanceled,
 		booking.StatusRequested,
 		booking.TypeRent,
-	).Scan(
-		&out.ID, &out.ItemID, &out.RequesterID, &out.OwnerID, &out.Type, &out.Status,
-		&out.Start, &out.End, &out.HandoverDeadline, &out.CreatedAt,
-	)
+	), &out)
 	if err != nil{
 		if errors.Is(err, pgx.ErrNoRows){
 			return booking.Booking{}, r.explainCancelNoRows(ctx, bookingID, requesterID)
@@ -380,12 +529,7 @@ func(r *Repo) ListMyBookings(ctx context.Context, requesterID int64, statuses[]b
 	}
 
 	const base = `
-	SELECT
-	id, item_id, requester_id, owner_id,
-	type, status,
-	start_at, end_at,
-	handover_deadline,
-	created_at
+	SELECT ` + selectBookingCols + `
 	FROM bookings
 	WHERE requester_id = $1
 	`
@@ -413,17 +557,7 @@ func(r *Repo) ListMyBookings(ctx context.Context, requesterID int64, statuses[]b
 	out := make([]booking.Booking, 0, limit)
 	for rows.Next(){
 		var b booking.Booking
-		if err:=rows.Scan(
-			&b.ID,
-			&b.ItemID,
-			&b.RequesterID,
-			&b.OwnerID,
-			&b.Type,
-			&b.Status,
-			&b.Start,
-			&b.End,
-			&b.HandoverDeadline,
-			&b.CreatedAt,); err != nil {
+		if err:= scanBooking(rows, &b); err != nil {
 			return nil, fmt.Errorf("bookings pgrepo: list my bookings scan: %w", err)
 		}
 		out = append(out, b)
@@ -451,12 +585,7 @@ func(r *Repo) ListMyItemsBookings(ctx context.Context, ownerID int64, statuses[]
 	}
 
 	const base = `
-	SELECT
-	id, item_id, requester_id, owner_id,
-	type, status,
-	start_at, end_at,
-	handover_deadline,
-	created_at
+	SELECT ` + selectBookingCols + `
 	FROM bookings
 	WHERE owner_id = $1
 	`
@@ -484,17 +613,7 @@ func(r *Repo) ListMyItemsBookings(ctx context.Context, ownerID int64, statuses[]
 	out := make([]booking.Booking, 0, limit)
 	for rows.Next(){
 		var b booking.Booking
-		if err:=rows.Scan(
-			&b.ID,
-			&b.ItemID,
-			&b.RequesterID,
-			&b.OwnerID,
-			&b.Type,
-			&b.Status,
-			&b.Start,
-			&b.End,
-			&b.HandoverDeadline,
-			&b.CreatedAt,); err != nil {
+		if err:=scanBooking(rows, &b); err != nil {
 			return nil, fmt.Errorf("bookings pgrepo: list my bookings scan: %w", err)
 		}
 		out = append(out, b)

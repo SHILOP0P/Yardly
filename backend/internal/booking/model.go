@@ -42,5 +42,10 @@ type Booking struct{
 
 	HandoverDeadline *time.Time `json:"handover_deadline,omitempty"`
 
+	HandoverConfirmedByOwnerAt     *time.Time `json:"handover_confirmed_by_owner_at,omitempty"`
+	HandoverConfirmedByRequesterAt *time.Time `json:"handover_confirmed_by_requester_at,omitempty"`
+	ReturnConfirmedByOwnerAt       *time.Time `json:"return_confirmed_by_owner_at,omitempty"`
+	ReturnConfirmedByRequesterAt   *time.Time `json:"return_confirmed_by_requester_at,omitempty"`
+
 	CreatedAt time.Time `json:"created_at"`
 }

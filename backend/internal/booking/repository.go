@@ -14,8 +14,10 @@ type Repo interface{
 	ListMyItemsBookings(ctx context.Context, ownerID int64, statuses[]Status, limit, offset int)([]Booking, error)
 
 	ApproveRent(ctx context.Context, bookingID int64, ownerID int64)(Booking, error)
-	ReturnRent(ctx context.Context, bookingID int64, ownerID int64)(Booking, error)
-	HandoverRent(ctx context.Context, bookingID int64, ownerID int64, now time.Time) (Booking, error)
+	
+	ReturnRent(ctx context.Context, bookingID int64, actorID int64, now time.Time)(Booking, error)
+	HandoverRent(ctx context.Context, bookingID int64, actorID int64, now time.Time) (Booking, error)
+	
 	ExpireOverdueHandovers(ctx context.Context, now time.Time) (int64, error)
 	CancelRent(ctx context.Context, bookingID, requesterID int64) (Booking, error)
 

@@ -86,7 +86,7 @@ func main() {
 
         runOnce()
 
-        for range {
+        for {
            select{
            case<-jobCtx.Done():
             log.Println("expire job stopped")

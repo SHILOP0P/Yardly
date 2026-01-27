@@ -167,13 +167,13 @@ func (h *Handler) Return(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, "invalid booking id")
 		return
 	}
-	ownerID, ok := auth.UserIDFromContext(r.Context())
+	actorID, ok := auth.UserIDFromContext(r.Context())
 	if !ok { 
 		httpx.WriteError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 
-	b, err := h.repo.ReturnRent(r.Context(), bookingID, ownerID)
+	b, err := h.repo.ReturnRent(r.Context(), bookingID, actorID, time.Now().UTC())
 	if err != nil {
 		writeBookingError(w, "return", err)
 		return
@@ -189,13 +189,13 @@ func (h *Handler) Handover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ownerID, ok := auth.UserIDFromContext(r.Context())
+	actorID, ok := auth.UserIDFromContext(r.Context())
 	if !ok { 
 		httpx.WriteError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 
-	b, err := h.repo.HandoverRent(r.Context(), bookingID, ownerID, time.Now().UTC())
+	b, err := h.repo.HandoverRent(r.Context(), bookingID, actorID, time.Now().UTC())
 	if err != nil {
 		writeBookingError(w, "handover", err)
 		return
