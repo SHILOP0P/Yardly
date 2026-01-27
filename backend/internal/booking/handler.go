@@ -95,7 +95,13 @@ func (h *Handler) CreateRent(w http.ResponseWriter, r *http.Request){
 
 
 	if err:=h.repo.Create(r.Context(), &b); err != nil{
-		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		switch {
+		case errors.Is(err, ErrDuplicateActiveRequest):
+			httpx.WriteError(w, http.StatusConflict, "active request already exists")
+		default:
+			log.Println("create rent error:", err)
+			httpx.WriteError(w, http.StatusInternalServerError, "internal error")
+		}
 		return
 	}
 	httpx.WriteJSON(w, http.StatusCreated, b)
@@ -343,9 +349,9 @@ func parseStatuses(values []string)([]Status, error){
 		switch Status(v){
 			case StatusRequested,
 			StatusApproved,
-			//StatusHandoverPending,
+			StatusHandoverPending,
 			StatusInUse,
-			//StatusReturnPending,
+			StatusReturnPending,
 			StatusCompleted,
 			StatusDeclined,
 			StatusCanceled,
