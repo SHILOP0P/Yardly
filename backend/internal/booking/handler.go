@@ -268,6 +268,55 @@ func (h *Handler) ListMyBookings(w http.ResponseWriter, r *http.Request){
 }
 
 
+func (h *Handler) ListMyItemsBookings(w http.ResponseWriter, r *http.Request){
+	ownerID, ok := auth.UserIDFromContext(r.Context())
+	if !ok{
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	q:= r.URL.Query()
+
+	limit:= 20
+	if v := q.Get("limit"); v!=""{
+		n, err := strconv.Atoi(v)
+		if err!= nil||n<=0{
+			httpx.WriteError(w, http.StatusBadRequest, "invalid limit")
+			return
+		}
+		if n>100{
+			n =100
+		}
+		limit = n
+	}
+
+	offset:=0
+	if v:=q.Get("offset"); v!=""{
+		n, err := strconv.Atoi(v)
+		if err!= nil||n<0{
+			httpx.WriteError(w, http.StatusBadRequest, "invalid offset")
+			return
+		}
+		offset = n
+	}
+	
+	statuses, err := parseStatuses(q["status"])
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	out, err := h.repo.ListMyItemsBookings(r.Context(), ownerID,statuses,limit,offset)
+	if err!= nil{
+		log.Println("list my items bookings error:", err)
+		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, out)
+}
+
+
+
 
 func writeBookingError(w http.ResponseWriter, op string, err error) {
 	switch {
@@ -294,9 +343,9 @@ func parseStatuses(values []string)([]Status, error){
 		switch Status(v){
 			case StatusRequested,
 			StatusApproved,
-			StatusHandoverPending,
+			//StatusHandoverPending,
 			StatusInUse,
-			StatusReturnPending,
+			//StatusReturnPending,
 			StatusCompleted,
 			StatusDeclined,
 			StatusCanceled,

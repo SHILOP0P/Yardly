@@ -60,22 +60,40 @@ func main() {
 
     srv := httpserver.New(port, pool, itemRepo, bookingRepo, userRepo, jwtSvc)
 
+    jobCtx, jobCancel := context.WithCancel(context.Background())
+
+    srv.RegisterOnShutdown(func(){
+        jobCancel()
+    })
+
     go func() {
         ticker := time.NewTicker(1 * time.Minute)
         defer ticker.Stop()
 
-        for range ticker.C {
-            n, err := bookingRepo.ExpireOverdueHandovers(
-                context.Background(),
-                time.Now().UTC(),
-            )
-            if err != nil {
-                log.Println("expire overdue handovers error:", err)
-                continue
+        runOnce:=func(){
+            ctx, cancel := context.WithTimeout(jobCtx, 5*time.Second)
+            defer cancel()
+
+            n, err:= bookingRepo.ExpireOverdueHandovers(ctx, time.Now().UTC())
+            if err!= nil{
+                 log.Println("expire overdue handovers error:", err)
+                return
             }
-            if n > 0 {
+            if n > 0{
                 log.Println("expired overdue handovers:", n)
             }
+        }
+
+        runOnce()
+
+        for range ticker.C {
+           select{
+           case<-jobCtx.Done():
+            log.Println("expire job stopped")
+            return
+           case <- ticker.C:
+            runOnce()
+           }
         }
     }()
 
