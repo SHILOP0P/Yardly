@@ -55,23 +55,25 @@ func (r *Repo) List(ctx context.Context, f item.ListFilter) ([]item.Item, error)
 	if offset < 0 {
 		offset = 0
 	}
+
+	st := make([]string, 0, len(f.Status))
+	for _, s:= range f.Status{
+		st = append(st, string(s))
+	}
 	
 	
 	q := `
 		SELECT id, owner_id, title, status, mode
 		FROM items
-		WHERE status IN ('active', 'in_use')
+		WHERE status = ANY($1::text[])
 		`
 
 		
 	args := make([]any, 0, 4)
 	n := 1
 
-	if f.Status != nil {
-		q += fmt.Sprintf(" AND status = $%d\n", n)
-		args = append(args, *f.Status)
-		n++
-	}
+	args = append(args, st)
+	n++
 
 	if f.Mode != nil{
 		q += fmt.Sprintf(" AND mode = $%d\n", n)

@@ -3,7 +3,7 @@ package item
 import "context"
 
 type ListFilter struct {
-	Status *Status
+	Status []Status
 	Mode   *DealMode
 	Limit  int
 	Offset int

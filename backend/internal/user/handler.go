@@ -2,9 +2,9 @@ package user
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
-	"errors"
 
 	"github.com/SHILOP0P/Yardly/backend/internal/auth"
 	"github.com/SHILOP0P/Yardly/backend/internal/httpx"

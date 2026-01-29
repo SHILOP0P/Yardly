@@ -27,14 +27,7 @@ func (h *Handler) List (w http.ResponseWriter, r *http.Request){
 
 	var f ListFilter
 
-	if v:= q.Get("status"); v!=""{
-		s:= Status(v)
-		if !s.Valid(){
-			httpx.WriteError(w, http.StatusBadRequest, "invalid status")
-			return
-		}
-		f.Status = &s
-	}
+	f.Status = []Status{StatusActive, StatusInUse}
 
 	if v := q.Get("mode"); v != "" {
 		m := DealMode(v)

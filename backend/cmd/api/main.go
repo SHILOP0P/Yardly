@@ -4,7 +4,6 @@ import (
 	"context"
 	"log"
 	"os"
-	"strconv"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -27,14 +26,17 @@ func main() {
         log.Println("APP_PORT not set, using default 8080")
     }
 
-    ttlMinutesStr := os.Getenv("JWT_TTL_MINUTES")
-    ttlMinute := 60
-    if ttlMinutesStr !=""{
-        if v, err := strconv.Atoi(ttlMinutesStr); err ==nil && v>0{
-            ttlMinute = v
-        }
+    jwtTTL, err := time.ParseDuration(os.Getenv("JWT_TTL_MINUTES"))
+    if err!=nil{
+        log.Fatal(err)
     }
-    jwtTTL := time.Duration(ttlMinute) * time.Minute
+
+
+    refreshTTL, err := time.ParseDuration(os.Getenv("REFRESH_TTL"))
+    if err != nil {
+        log.Fatal(err)
+    }
+
 
     jwtSvc := auth.NewJWT(
     os.Getenv("JWT_SECRET"),
@@ -58,9 +60,11 @@ func main() {
     bookingRepo := bookingpg.New(pool, eventRepo)
     itemRepo:= itempg.New(pool)
     userRepo :=userpg.New(pool)
+    refreshRepo := auth.NewRefreshRepo(pool)
+    
 
 
-    srv := httpserver.New(port, pool, itemRepo, bookingRepo, userRepo, jwtSvc)
+    srv := httpserver.New(port, pool, itemRepo, bookingRepo, userRepo, refreshRepo, jwtSvc, refreshTTL)
 
     jobCtx, jobCancel := context.WithCancel(context.Background())
 

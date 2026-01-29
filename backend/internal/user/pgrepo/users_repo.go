@@ -109,3 +109,14 @@ func (r *Repo) GetByID(ctx context.Context, id int64)(user.User, user.Profile, e
 	p.UserID = u.ID
 	return u, p, nil
 }
+
+func (r *Repo) Authenticate(ctx context.Context, email, password string)(int64, error){
+	u, err:=r.GetByEmail(ctx, email)
+	if err!=nil{
+		return 0, user.ErrInvalidCredentials
+	}
+	if ok:=user.CheckPassword(u.PasswordHash, password); !ok {
+		return 0, user.ErrInvalidCredentials
+	}
+	return u.ID, nil
+}

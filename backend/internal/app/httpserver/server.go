@@ -3,20 +3,21 @@ package httpserver
 import (
 	"fmt"
 	"net/http"
+	"time"
 
 	bookingpg "github.com/SHILOP0P/Yardly/backend/internal/booking/pgrepo"
 	itempg "github.com/SHILOP0P/Yardly/backend/internal/item/pgrepo"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/SHILOP0P/Yardly/backend/internal/user"
 	userpg "github.com/SHILOP0P/Yardly/backend/internal/user/pgrepo"
-    "github.com/SHILOP0P/Yardly/backend/internal/user"
 
+	"github.com/SHILOP0P/Yardly/backend/internal/auth"
 	"github.com/SHILOP0P/Yardly/backend/internal/booking"
 	"github.com/SHILOP0P/Yardly/backend/internal/item"
-	"github.com/SHILOP0P/Yardly/backend/internal/auth"
 )
 
-func New(port string, pool *pgxpool.Pool,itemsRepo *itempg.Repo, bookingRepo *bookingpg.Repo, userRepo *userpg.Repo, jwtSvc *auth.JWT) *http.Server{
+func New(port string, pool *pgxpool.Pool,itemsRepo *itempg.Repo, bookingRepo *bookingpg.Repo, userRepo *userpg.Repo, refreshesRepo *auth.RefreshRepo, jwtSvc *auth.JWT, refreshTTL time.Duration) *http.Server{
 	mux := http.NewServeMux()
 
 	RegisterBaseRotes(mux)
@@ -28,6 +29,8 @@ func New(port string, pool *pgxpool.Pool,itemsRepo *itempg.Repo, bookingRepo *bo
 	booking.RegisterRoutes(mux, bookingRepo, itemsRepo, authMw)
 
 	user.RegisterRoutes(mux, authMw, userRepo, jwtSvc)
+
+	auth.RegisterRoutes(mux, jwtSvc, refreshesRepo, refreshTTL, userRepo)
 
 	return &http.Server{
 		Addr: ":" + port,
