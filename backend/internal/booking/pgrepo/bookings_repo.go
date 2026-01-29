@@ -598,30 +598,35 @@ func (r *Repo) ExpireOverdueHandovers(ctx context.Context, now time.Time) (int64
 	if err != nil {
 		return 0, fmt.Errorf("bookings pgrepo: expire query: %w", err)
 	}
-	defer rows.Close()
 
-	var n int64
-	from := booking.StatusApproved
-	to:=booking.StatusExpired
-
+	ids := make([]int64, 0, 16)
 	for rows.Next(){
 		var id int64
-		if err := rows.Scan(&id);err!=nil{
+		if err := rows.Scan(&id); err!=nil{
+			rows.Close()
 			return 0, fmt.Errorf("bookings pgrepo: expire scan: %w", err)
 		}
-		n++
-		if err:=r.eventRepo.InsertBookingEvent(ctx, tx, id, nil, "expire", &from, &to, nil); err!=nil{
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err!=nil{
+		rows.Close()
+		return 0, fmt.Errorf("bookings pgrepo: expire rows: %w", err)
+	}
+	rows.Close()
+
+	from := booking.StatusApproved
+	to := booking.StatusExpired
+
+	for _, id:=range ids{
+		if err := r.eventRepo.InsertBookingEvent(ctx, tx, id, nil, "expire", &from, &to, nil); err != nil{
 			return 0, err
 		}
-	}
-	if err:=rows.Err(); err!=nil{
-		return 0, fmt.Errorf("bookings pgrepo: expire rows: %w", err)
 	}
 	
 	if err:=tx.Commit(ctx); err!=nil{
 		return 0, fmt.Errorf("bookings pgrepo: commit: %w", err)
 	}
-	return n, nil
+	return int64(len(ids)), nil
 }
 
 func (r *Repo) CancelRent(ctx context.Context, bookingID, requesterID int64)(booking.Booking, error){
@@ -836,4 +841,14 @@ func (r *Repo) explainCancelNoRows(ctx context.Context, bookingID, requesterID i
 	}
 	// если это не rent или статус не requested — это конфликт состояния
 	return booking.ErrInvalidState
+}
+
+
+
+
+
+
+// FOR EVENT_REPO
+func (r *Repo) ListEvents(ctx context.Context, bookingID int64, limit, offset int) ([]booking.Event, error) {
+	return r.eventRepo.ListBookingEvents(ctx, r.pool, bookingID, limit, offset)
 }

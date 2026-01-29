@@ -21,4 +21,6 @@ type Repo interface{
 	ExpireOverdueHandovers(ctx context.Context, now time.Time) (int64, error)
 	CancelRent(ctx context.Context, bookingID, requesterID int64) (Booking, error)
 
+	ListEvents(ctx context.Context, bookingID int64, limit, offset int) ([]Event, error)
+
 }

@@ -322,6 +322,68 @@ func (h *Handler) ListMyItemsBookings(w http.ResponseWriter, r *http.Request){
 }
 
 
+func (h *Handler) ListEvents(w http.ResponseWriter, r *http.Request){
+	bookingID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || bookingID <= 0 {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid booking id")
+		return
+	}
+	actorID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	
+
+	b, err := h.repo.GetByID(r.Context(), bookingID)
+	if err!= nil {
+		writeBookingError(w, "get booking", err)
+		return
+	}
+	if actorID != b.OwnerID && actorID!= b.RequesterID{
+		httpx.WriteError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	
+	q:=r.URL.Query()
+
+	limit := 50
+	if v:=q.Get("limit");v!=""{
+		n, err := strconv.Atoi(v)
+		if err != nil{
+			httpx.WriteError(w, http.StatusBadRequest, "invalid limit")
+			return
+		}
+		if n > 200{
+			n = 200
+		}
+		limit = n
+	}
+
+	offset := 0
+	if v:=q.Get("offset"); v!=""{
+		n, err := strconv.Atoi(v)
+		if err!=nil{
+			httpx.WriteError(w, http.StatusBadRequest, "invalid offset")
+			return
+		}
+		offset = n
+	}
+
+	events, err := h.repo.ListEvents(r.Context(), bookingID, limit, offset)
+	if err != nil{
+		log.Println("list events error:", err)
+		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	httpx.WriteJSON(w, http.StatusOK, events)
+}
+
+
+
+
+
 
 
 func writeBookingError(w http.ResponseWriter, op string, err error) {

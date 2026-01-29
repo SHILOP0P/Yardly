@@ -21,5 +21,7 @@ func RegisterRoutes(mux *http.ServeMux, repo Repo, items ItemGetter, authMw Midd
 
 	mux.Handle("POST /api/bookings/{id}/cancel", authMw(http.HandlerFunc(h.Cancel)))
 
+	
+	mux.Handle("GET /api/bookings/{id}/events", authMw(http.HandlerFunc(h.ListEvents)))
 
 }
