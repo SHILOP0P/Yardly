@@ -298,7 +298,6 @@ WHERE item_id = $2
 		}
 	}
 
-
 	if err :=tx.Commit(ctx); err!=nil{
 		return booking.Booking{}, fmt.Errorf("bookings pgrepo: commit: %w", err)
 	}
@@ -431,6 +430,10 @@ func (r *Repo) ReturnRent(ctx context.Context, bookingID int64, actorID int64, n
 			&to,
 			nil,
 		); err != nil {
+			return booking.Booking{}, err
+		}
+
+		if err := syncItemStatusTx(ctx, tx, b.ItemID); err != nil{
 			return booking.Booking{}, err
 		}
 	}
@@ -570,7 +573,12 @@ func (r *Repo) HandoverRent(ctx context.Context, bookingID int64, actorID int64,
 		); err != nil {
 			return booking.Booking{}, err
 		}
+
+		if err := syncItemStatusTx(ctx, tx, b.ItemID); err != nil{
+			return booking.Booking{}, err
+		}
 	}
+	
 	if err:=tx.Commit(ctx); err!=nil{
 		return booking.Booking{}, fmt.Errorf("bookings pgrepo: commit: %w", err)
 	}
@@ -788,7 +796,45 @@ func(r *Repo) ListMyItemsBookings(ctx context.Context, ownerID int64, statuses[]
 
 
 
+func syncItemStatusTx(ctx context.Context, tx pgx.Tx, itemID int64) error{
+	const lockItemQ = `SELECT status FROM items WHERE id = $1 FOR UPDATE`
+	var cur string
+	if err := tx.QueryRow(ctx, lockItemQ, itemID).Scan(&cur); err != nil{
+		return fmt.Errorf("sync item status: get item status: %w", err)
+	}
+	if cur == "archived" || cur == "deleted" {
+		return nil
+	}
 
+	const existsq=`
+	SELECT EXISTS (
+	SELECT 1
+	FROM bookings
+	WHERE item_id = $1
+		AND type = 'rent'
+		AND status IN ('in_use', 'return_pending')
+	)
+	`
+	var hasActive bool
+	if err := tx.QueryRow(ctx, existsq, itemID).Scan(&hasActive); err!= nil{
+		return fmt.Errorf("sync item status: exists: %w", err)
+	}
+	newStatus := "active"
+	if hasActive {
+		newStatus = "in_use"
+	}
+
+	if newStatus == cur{
+		return nil
+	}
+
+	const updateQ = `UPDATE items SET status = $2 WHERE id = $1`
+
+	if _, err := tx.Exec(ctx, updateQ, itemID, newStatus); err != nil{
+		return fmt.Errorf("sync item status: update: %w", err)
+	}
+	return nil
+}
 
 
 

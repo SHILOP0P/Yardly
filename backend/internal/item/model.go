@@ -4,7 +4,9 @@ type Status string
 
 const (
 	StatusActive   Status = "active"   // показываем в ленте
-	StatusArchived Status = "archived" // ушло из оборота (продано/отдано/скрыто)
+	StatusInUse    Status = "in_use"
+	StatusArchived Status = "archived"
+	StatusDeleted  Status = "deleted"
 )
 
 type DealMode string
@@ -26,7 +28,13 @@ type Item struct {
 
 
 func (s Status) Valid() bool {
-	return s == StatusActive || s == StatusArchived
+	switch s{
+	case StatusActive, StatusArchived, StatusDeleted, StatusInUse:
+		return true
+	default:
+		return false
+	}
+	
 }
 
 func (m DealMode) Valid() bool {

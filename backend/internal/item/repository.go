@@ -13,5 +13,8 @@ type Repo interface {
 	Create(ctx context.Context, it *Item) error
 	List(ctx context.Context, f ListFilter) ([]Item, error)
 	GetByID(ctx context.Context, id int64) (Item, error)
+
+	ListByOwnerPublic(ctx context.Context, ownerID int64, limit, offset int)([]Item, error)
+	ListMyItems(ctx context.Context, ownerId int64, limit, offset int)([]Item, error)
 }
  

@@ -60,7 +60,7 @@ func (r *Repo) List(ctx context.Context, f item.ListFilter) ([]item.Item, error)
 	q := `
 		SELECT id, owner_id, title, status, mode
 		FROM items
-		WHERE 1=1
+		WHERE status IN ('active', 'in_use')
 		`
 
 		
@@ -128,4 +128,91 @@ func (r *Repo) Create(ctx context.Context, it *item.Item) error{
 		return fmt.Errorf("items pgrepo: %w", err)
 	}
 	return nil
+}
+
+func (r *Repo) ListByOwnerPublic(ctx context.Context, ownerID int64, limit, offset int)([]item.Item, error){
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	const q = `
+	SELECT id, owner_id, title, status, mode
+	FROM items
+	WHERE owner_id = $1
+	AND status IN ('active', 'in_use')
+	ORDER BY id DESC
+	LIMIT $2 OFFSET $3
+	`
+
+	rows, err := r.pool.Query(ctx, q, ownerID, limit, offset)
+	if err!=nil{
+		return nil, fmt.Errorf("items pgrepo: list by owner public: %w", err)
+	}
+	defer rows.Close()
+
+	out:=make([]item.Item, 0, limit)
+	for rows.Next(){
+		var it item.Item
+		if err := rows.Scan(			
+			&it.ID,
+			&it.OwnerID,
+			&it.Title,
+			&it.Status,
+			&it.Mode,);err!=nil{
+			return nil, fmt.Errorf("items pgrepo: list by owner public scan: %w", err)
+		}
+		out = append(out, it)
+	}
+	if err:= rows.Err(); err!= nil{
+		return nil, fmt.Errorf("items pgrepo: list by owner public rows: %w", err)
+	}
+	return out, nil
+}
+
+
+func (r *Repo) ListMyItems(ctx context.Context, ownerID int64, limit, offset int)([]item.Item, error){
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	const q = `
+	SELECT id, owner_id, title, status, mode
+	FROM items
+	WHERE owner_id = $1
+	AND status <> 'deleted'
+	ORDER BY id DESC
+	LIMIT $2 OFFSET $3
+	`
+	rows, err := r.pool.Query(ctx, q, ownerID, limit, offset)
+	if err!=nil{
+		return nil, fmt.Errorf("items pgrepo: list my items: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]item.Item, 0, 64)
+	for rows.Next(){
+		var it item.Item
+		if err:=rows.Scan(
+			&it.ID,
+			&it.OwnerID,
+			&it.Title,
+			&it.Status,
+			&it.Mode,
+			); err!=nil{
+			return nil, fmt.Errorf("items pgrepo: list my items scan: %w", err)
+		}
+		out = append(out, it)
+	}
+
+	if err := rows.Err(); err != nil{
+		return nil, fmt.Errorf("items pgrepo: list my items rows: %w", err)
+	}
+
+	return out, nil
 }
