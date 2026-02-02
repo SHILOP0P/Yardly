@@ -75,14 +75,14 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request){
 		httpx.WriteError(w, http.StatusInternalServerError, "could not mint token")
 		return
 	}
-	refreshTok, err := mintRefreshTocken()
+	refreshTok, err := mintRefreshToken()
 	if err!=nil{
 		log.Println("Error minting refresh token:", err)
 		httpx.WriteError(w, http.StatusInternalServerError, "could not mint refresh token")
 		return
 	}
 
-	expiresAt := time.Now().Add(h.refreshTTL)
+	expiresAt := time.Now().UTC().Add(h.refreshTTL)
 	if err :=h.refresh.Create(r.Context(), userID, refreshTok, expiresAt); err!= nil{
 		log.Println("Error saving refresh token:", err)
 		httpx.WriteError(w, http.StatusInternalServerError, "could not save refresh token")
@@ -105,10 +105,18 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request){
 	}
 	
 	now:=time.Now().UTC()
+	
+	expiresAt := now.Add(h.refreshTTL)
 
-	userID, err := h.refresh.Consume(r.Context(), req.RefreshToken, now)
+	newRefresh, err := mintRefreshToken()
 	if err!=nil{
-		httpx.WriteError(w, http.StatusUnauthorized, "invalid refresh token")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not mint refresh token")
+		return
+	}
+
+	userID, err := h.refresh.Rotate(r.Context(), req.RefreshToken, newRefresh, expiresAt, now)
+	if err!=nil{
+		httpx.WriteError(w, http.StatusInternalServerError, "could not mint token")
 		return
 	}
 
@@ -118,22 +126,27 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request){
 		return
 	}
 
-	newRefresh, err := mintRefreshTocken()
-	if err!=nil{
-		httpx.WriteError(w, http.StatusInternalServerError, "could not mint refresh token")
-		return
-	}
-
-	expiresAt := now.Add(h.refreshTTL)
-	if err := h.refresh.Create(r.Context(), userID, newRefresh, expiresAt); err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "could not save refresh token")
-		return
-	}
 	httpx.WriteJSON(w, http.StatusOK, refreshResponse{
 		AccessToken:  accessTok,
 		RefreshToken: newRefresh,
 		TokenType:    "Bearer",
 	})
+}
+
+
+func (h *Handler) Logout(w http.ResponseWriter, r *http.Request){
+	var req refreshRequest
+	if err:=json.NewDecoder(r.Body).Decode(&req); err!=nil || req.RefreshToken == ""{
+		httpx.WriteError(w, http.StatusBadRequest, "invalid refresh_token")
+		return
+	}
+	now := time.Now().UTC()
+
+	if err := h.refresh.Revoke(r.Context(), req.RefreshToken, now); err!= nil{
+		httpx.WriteError(w, http.StatusInternalServerError, "could not revoke refresh token")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 
@@ -146,8 +159,7 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request){
 
 
 
-
-func mintRefreshTocken()(string, error){
+func mintRefreshToken()(string, error){
 	b:=make([]byte, 32)
 	if _, err :=rand.Read(b); err != nil{
 		return "", err

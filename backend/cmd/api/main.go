@@ -38,10 +38,13 @@ func main() {
     }
 
 
+    jwtSecret := os.Getenv("JWT_SECRET")
+
     jwtSvc := auth.NewJWT(
-    os.Getenv("JWT_SECRET"),
+    jwtSecret,
     jwtTTL,
     )
+
 
 
     databaseURL := os.Getenv("DATABASE_URL")
@@ -60,7 +63,7 @@ func main() {
     bookingRepo := bookingpg.New(pool, eventRepo)
     itemRepo:= itempg.New(pool)
     userRepo :=userpg.New(pool)
-    refreshRepo := auth.NewRefreshRepo(pool)
+    refreshRepo := auth.NewRefreshRepo(pool, jwtSecret)
     
 
 
