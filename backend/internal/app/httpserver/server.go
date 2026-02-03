@@ -30,7 +30,7 @@ func New(port string, pool *pgxpool.Pool,itemsRepo *itempg.Repo, bookingRepo *bo
 
 	user.RegisterRoutes(mux, authMw, userRepo, jwtSvc)
 
-	auth.RegisterRoutes(mux, jwtSvc, refreshesRepo, refreshTTL, userRepo)
+	auth.RegisterRoutes(mux, jwtSvc, refreshesRepo, refreshTTL, userRepo, authMw)
 
 	return &http.Server{
 		Addr: ":" + port,

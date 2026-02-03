@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"log"
 	"time"
+	stdErrors "errors"
 
 	"crypto/rand"
 	"encoding/base64"
@@ -97,6 +98,10 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request){
 	})
 }
 
+
+const refreshGrace = 5 * time.Second
+
+
 func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request){
 	var req refreshRequest
 	if err:= json.NewDecoder(r.Body).Decode(&req); err != nil || req.RefreshToken ==""{
@@ -114,9 +119,19 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request){
 		return
 	}
 
-	userID, err := h.refresh.Rotate(r.Context(), req.RefreshToken, newRefresh, expiresAt, now)
-	if err!=nil{
-		httpx.WriteError(w, http.StatusInternalServerError, "could not mint token")
+	userID, err := h.refresh.Rotate(r.Context(), req.RefreshToken, newRefresh, expiresAt, now, refreshGrace)
+	if err != nil {
+		switch {
+		case stdErrors.Is(err, ErrInvalidRefresh):
+			httpx.WriteError(w, http.StatusUnauthorized, "invalid refresh token")
+		case stdErrors.Is(err, ErrRefreshAlreadyRotated):
+			httpx.WriteError(w, http.StatusUnauthorized, "stale refresh token")
+		case stdErrors.Is(err, ErrRefreshReuse):
+			httpx.WriteError(w, http.StatusUnauthorized, "refresh reuse detected")
+		default:
+			log.Println(err)
+			httpx.WriteError(w, http.StatusInternalServerError, "could not rotate refresh token")
+		}
 		return
 	}
 
@@ -146,6 +161,23 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request){
 		httpx.WriteError(w, http.StatusInternalServerError, "could not revoke refresh token")
 		return
 	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+
+func (h *Handler) LogoutAll(w http.ResponseWriter, r *http.Request){
+	userID, ok := UserIDFromContext(r.Context())
+	if !ok{
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthorized")
+	}
+
+	now := time.Now().UTC()
+
+	if err:=h.refresh.RevokeAllForUser(r.Context(),userID, now); err!=nil{
+		httpx.WriteError(w, http.StatusInternalServerError, "could not revoke sessions")
+		return
+	}
+	
 	w.WriteHeader(http.StatusNoContent)
 }
 
