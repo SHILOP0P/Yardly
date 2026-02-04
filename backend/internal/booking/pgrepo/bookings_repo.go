@@ -791,6 +791,281 @@ func(r *Repo) ListMyItemsBookings(ctx context.Context, ownerID int64, statuses[]
 
 
 
+//TRANSFER
+
+func (r *Repo) ApproveTransfer(ctx context.Context, bookingID int64, ownerID int64, now time.Time)(booking.Booking, error){
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err!=nil{
+		return booking.Booking{}, fmt.Errorf("bookings pgrepo: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	const selectQ = `
+	SELECT ` + selectBookingCols + `
+	FROM bookings
+	WHERE id = $1
+	FOR UPDATE
+	`
+	var b booking.Booking
+	if err := scanBooking(tx.QueryRow(ctx, selectQ, bookingID), &b); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return booking.Booking{}, booking.ErrNotFound
+		}
+		return booking.Booking{}, fmt.Errorf("bookings pgrepo: approve transfer select: %w", err)
+	}
+
+	if b.OwnerID != ownerID {
+		return booking.Booking{}, booking.ErrForbidden
+	}
+	if b.Type != booking.TypeBuy && b.Type != booking.TypeGive {
+		return booking.Booking{}, booking.ErrInvalidState
+	}
+	if b.Status != booking.StatusRequested {
+		return booking.Booking{}, booking.ErrInvalidState
+	}
+	// у transfer не должно быть дат
+	if b.Start != nil || b.End != nil {
+		return booking.Booking{}, booking.ErrInvalidState
+	}
+
+	// дедлайн на забрать/встретиться (можешь поменять TTL)
+	deadline := now.Add(240 * time.Hour)
+
+	const approveQ = `
+	UPDATE bookings
+	SET status = $2,
+	    handover_deadline = $3
+	WHERE id = $1 AND status = $4
+	RETURNING ` + selectBookingCols + `
+	`
+	var out booking.Booking
+	if err := scanBooking(tx.QueryRow(ctx, approveQ,
+		b.ID,
+		booking.StatusApproved,
+		deadline,
+		booking.StatusRequested,
+	), &out); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return booking.Booking{}, booking.ErrInvalidState
+		}
+		return booking.Booking{}, fmt.Errorf("bookings pgrepo: approve transfer update: %w", err)
+	}
+
+	// авто-отклоняем всех конкурентов requested по этому item для buy/give
+	const declineQ = `
+	UPDATE bookings
+	SET status = $1
+	WHERE item_id = $2
+	  AND type IN ('buy','give')
+	  AND status = $3
+	  AND id <> $4
+	RETURNING id
+	`
+	rows, err := tx.Query(ctx, declineQ,
+		booking.StatusDeclined,
+		out.ItemID,
+		booking.StatusRequested,
+		out.ID,
+	)
+	if err != nil {
+		return booking.Booking{}, fmt.Errorf("bookings pgrepo: decline transfer competitors: %w", err)
+	}
+
+	defer rows.Close()
+
+	declinedIDs := make([]int64, 0, 0)
+	for rows.Next(){
+		var id int64
+		if err:= rows.Scan(&id); err!= nil{
+			return booking.Booking{}, fmt.Errorf("bookings pgrepo: decline transfer scan: %w", err)
+		}
+		declinedIDs = append(declinedIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return booking.Booking{}, fmt.Errorf("bookings pgrepo: decline transfer rows: %w", err)
+	}
+
+	actor := ownerID
+	from:= booking.StatusRequested
+	to := booking.StatusApproved
+
+	if err:= r.eventRepo.InsertBookingEvent(ctx, tx, bookingID, &actor, "approve_transfer", &from, &to, nil); err!= nil{
+		return booking.Booking{}, err
+	}
+
+	df := booking.StatusRequested
+	dt := booking.StatusDeclined
+	for _, id := range declinedIDs {
+		if err := r.eventRepo.InsertBookingEvent(ctx, tx, id, &actor, "auto_decline_transfer", &df, &dt, nil); err != nil {
+			return booking.Booking{}, err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return booking.Booking{}, fmt.Errorf("bookings pgrepo: commit: %w", err)
+	}
+	return out, nil
+}
+
+
+
+func (r *Repo) HandoverTransfer(ctx context.Context, bookingID, actorID int64, now time.Time)(booking.Booking, error){
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err!=nil{
+		return booking.Booking{}, fmt.Errorf("bookings pgrepo: begin tx: %w", err)
+	}
+
+	defer tx.Rollback(ctx)
+
+	const selectQ = `
+	SELECT ` + selectBookingCols + `
+	FROM bookings
+	WHERE id = $1
+	FOR UPDATE
+	`
+	var b booking.Booking
+	if err := scanBooking(tx.QueryRow(ctx, selectQ, bookingID), &b); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return booking.Booking{}, booking.ErrNotFound
+		}
+		return booking.Booking{}, fmt.Errorf("bookings pgrepo: handover transfer select: %w", err)
+	}
+
+	if b.Type != booking.TypeBuy && b.Type != booking.TypeGive {
+		return booking.Booking{}, booking.ErrInvalidState
+	}
+	// подтверждать можно только после approved
+	if b.Status != booking.StatusApproved && b.Status != booking.StatusHandoverPending {
+		return booking.Booking{}, booking.ErrInvalidState
+	}
+	// участник должен быть owner или requester
+	if actorID != b.OwnerID && actorID != b.RequesterID {
+		return booking.Booking{}, booking.ErrForbidden
+	}
+
+	if actorID == b.OwnerID && actorID == b.RequesterID {
+		return booking.Booking{}, booking.ErrForbidden
+	}
+
+
+	// ставим отметку кто подтвердил handover
+	setOwner := (actorID == b.OwnerID)
+	setRequester := (actorID == b.RequesterID)
+
+	newStatus := b.Status
+	if newStatus == booking.StatusApproved{
+		newStatus = booking.StatusHandoverPending
+	}
+
+	const updQ = `
+	UPDATE bookings
+	SET status = $2,
+		handover_confirmed_by_owner_at =
+		COALESCE(handover_confirmed_by_owner_at,
+				CASE WHEN $3 THEN $4::timestamptz ELSE NULL END),
+		handover_confirmed_by_requester_at =
+		COALESCE(handover_confirmed_by_requester_at,
+				CASE WHEN $5 THEN $4::timestamptz ELSE NULL END)
+	WHERE id = $1
+	RETURNING ` + selectBookingCols + `
+	`
+
+	var out booking.Booking
+	if err := scanBooking(tx.QueryRow(ctx, updQ,
+		b.ID,
+		newStatus,
+		setOwner,
+		now,
+		setRequester,
+	), &out); err != nil {
+		return booking.Booking{}, fmt.Errorf("bookings pgrepo: handover transfer update: %w", err)
+	}
+
+	actor := actorID
+
+	if out.HandoverConfirmedByOwnerAt != nil && out.HandoverConfirmedByRequesterAt != nil{
+		from:= out.Status
+		to:=booking.StatusCompleted
+
+		const finQ = `
+		UPDATE bookings
+		SET status = $2
+		WHERE id = $1
+		RETURNING ` + selectBookingCols + `
+		`
+		if err := scanBooking(tx.QueryRow(ctx, finQ, out.ID, booking.StatusCompleted), &out); err != nil {
+			return booking.Booking{}, fmt.Errorf("bookings pgrepo: complete transfer: %w", err)
+		}
+
+		if err := markItemTransferredTx(ctx, tx, out.ItemID); err != nil{
+			return booking.Booking{}, err
+		}
+
+		if err := r.eventRepo.InsertBookingEvent(ctx, tx, bookingID, &actor, "complete_transfer", &from, &to, nil); err!=nil{
+			return booking.Booking{}, err
+		}
+	}else {
+		from := b.Status
+		to := out.Status
+		if err := r.eventRepo.InsertBookingEvent(ctx, tx, out.ID, &actor, "handover_transfer_confirm", &from, &to, nil); err != nil {
+			return booking.Booking{}, err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return booking.Booking{}, fmt.Errorf("bookings pgrepo: commit: %w", err)
+	}
+	return out, nil
+}
+
+func (r *Repo) CancelTransfer(ctx context.Context, bookingID, requesterID int64)(booking.Booking, error){
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return booking.Booking{}, fmt.Errorf("bookings pgrepo: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	const q = `
+	UPDATE bookings
+	SET status = $3
+	WHERE id = $1
+	  AND requester_id = $2
+	  AND status = $4
+	  AND type IN ('buy','give')
+	RETURNING ` + selectBookingCols + `
+	`
+
+	var out booking.Booking
+	err = scanBooking(tx.QueryRow(ctx, q,
+		bookingID,
+		requesterID,
+		booking.StatusCanceled,
+		booking.StatusRequested,
+	), &out)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return booking.Booking{}, r.explainCancelNoRows(ctx, bookingID, requesterID)
+		}
+		return booking.Booking{}, err
+	}
+
+	actor:= requesterID
+	from := booking.StatusRequested
+	to := booking.StatusCanceled
+
+
+	if err := r.eventRepo.InsertBookingEvent(ctx, tx, out.ID, &actor, "cancel_transfer", &from, &to, nil); err != nil {
+		return booking.Booking{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return booking.Booking{}, fmt.Errorf("bookings pgrepo: commit: %w", err)
+	}
+	return out, nil
+}
+
+
+
 
 
 
@@ -894,7 +1169,33 @@ func (r *Repo) explainCancelNoRows(ctx context.Context, bookingID, requesterID i
 
 
 
+
+
 // FOR EVENT_REPO
 func (r *Repo) ListEvents(ctx context.Context, bookingID int64, limit, offset int) ([]booking.Event, error) {
 	return r.eventRepo.ListBookingEvents(ctx, r.pool, bookingID, limit, offset)
+}
+
+
+
+
+
+//HELPERS
+
+func markItemTransferredTx(ctx context.Context, tx pgx.Tx, itemID int64)error{
+	const lockItemQ = `SELECT status FROM items WHERE id = $1 FOR UPDATE`
+	var cur string
+	if err:= tx.QueryRow(ctx, lockItemQ, itemID).Scan(&cur); err!=nil{
+		return fmt.Errorf("mark item deleted: get item status: %w", err)
+	}
+	if cur == "archived" || cur == "deleted" || cur == "transferred"{
+		return nil
+	}
+
+	const updateQ = `UPDATE items SET status = 'transferred' WHERE id = $1`
+
+	if _, err := tx.Exec(ctx, updateQ, itemID); err!=nil{
+		return fmt.Errorf("mark item deleted: update: %w", err)
+	}
+	return nil
 }

@@ -9,7 +9,7 @@ type Middleware func(http.Handler) http.Handler
 func RegisterRoutes(mux *http.ServeMux, repo Repo, items ItemGetter, authMw Middleware){//тут остановился
 	h := NewHandler(repo, items)
 
-	mux.Handle("POST /api/items/{id}/bookings", authMw(http.HandlerFunc(h.CreateRent)))
+	mux.Handle("POST /api/items/{id}/bookings", authMw(http.HandlerFunc(h.Create)))
 	mux.HandleFunc("GET /api/items/{id}/bookings", h.ListBusyForItem)
 
 	mux.Handle("GET /api/my/bookings", authMw(http.HandlerFunc(h.ListMyBookings)))

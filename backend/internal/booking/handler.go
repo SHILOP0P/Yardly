@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"context"
@@ -37,6 +38,98 @@ type approveResponseDTO struct {
 	Approved Booking   `json:"approved"`
 	Declined []Booking `json:"declined"`
 }
+
+type createBookingRequestDTO struct {
+	Type  string `json:"type"` // "rent" | "buy" | "give"
+	Start string `json:"start_at,omitempty"`
+	End   string `json:"end_at,omitempty"`
+}
+
+func (h *Handler) Create(w http.ResponseWriter, r *http.Request){
+	itemID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err!=nil{
+		log.Println("Invalid item ID:", err)
+		httpx.WriteError(w, http.StatusBadRequest, "invalid item id")
+		return
+	}
+
+	var dto createBookingRequestDTO
+	if err:=json.NewDecoder(r.Body).Decode(&dto); err!= nil{
+		httpx.WriteError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	
+	tp:=Type(strings.TrimSpace(dto.Type))
+	if tp==""{
+		httpx.WriteError(w, http.StatusBadRequest, "type is required")
+		return
+	}
+	switch tp {
+	case TypeRent, TypeBuy, TypeGive:
+	default:
+		httpx.WriteError(w, http.StatusBadRequest, "invalid type")
+		return
+	}
+
+	requesterID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	it, err := h.items.GetByID(r.Context(), itemID)
+	if err != nil {
+		httpx.WriteError(w, http.StatusNotFound, "item not found")
+		return
+	}
+
+	ownerID := it.OwnerID
+	if ownerID == requesterID {
+		httpx.WriteError(w, http.StatusBadRequest, "cannot book your own item")
+		return
+	}
+
+	b := Booking{
+		ItemID:      itemID,
+		RequesterID: requesterID,
+		OwnerID:     ownerID,
+		Type:        tp,
+		Status:      StatusRequested,
+	}
+
+	if tp == TypeRent{
+		start, err1 := time.Parse(time.RFC3339, dto.Start)
+		end, err2 := time.Parse(time.RFC3339, dto.End)
+		if err1!=nil||err2!=nil{
+			httpx.WriteError(w, http.StatusBadRequest, "start/end must be RFC3339")
+			return
+		}
+		if !start.Before(end) {
+			httpx.WriteError(w, http.StatusBadRequest, "start must be before end")
+			return
+		}
+		b.Start = &start
+		b.End = &end
+	} else {
+		if strings.TrimSpace(dto.Start)!=""||strings.TrimSpace(dto.End)!=""{
+			httpx.WriteError(w, http.StatusBadRequest, "start/end are not allowed for buy/give")
+			return
+		}
+	}
+	if err := h.repo.Create(r.Context(), &b); err != nil {
+		switch {
+		case errors.Is(err, ErrDuplicateActiveRequest):
+			httpx.WriteError(w, http.StatusConflict, "active request already exists")
+		default:
+			log.Println("create booking error:", err)
+			httpx.WriteError(w, http.StatusInternalServerError, "internal error")
+		}
+		return
+	}
+	httpx.WriteJSON(w, http.StatusCreated, b)
+}
+
+
 
 
 func (h *Handler) CreateRent(w http.ResponseWriter, r *http.Request){
@@ -150,17 +243,38 @@ func (h *Handler) Approve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	b, err := h.repo.ApproveRent(r.Context(), bookingID, ownerID)
+	b0, err := h.repo.GetByID(r.Context(), bookingID)
+	if err != nil {
+		writeBookingError(w, "get booking", err)
+		return
+	}
+	if b0.OwnerID != ownerID {
+		httpx.WriteError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
+	var b Booking
+	switch b0.Type{
+	case TypeRent:
+		b, err = h.repo.ApproveRent(r.Context(),bookingID, ownerID)
+	case TypeBuy, TypeGive:
+		b, err = h.repo.ApproveTransfer(r.Context(), bookingID, ownerID, time.Now().UTC())
+	default:
+		httpx.WriteError(w, http.StatusBadRequest, "invalid type")
+		return
+	}
+	
 	if err != nil {
 		writeBookingError(w, "approve", err)
 		return
 	}
 
+
 	httpx.WriteJSON(w,http.StatusOK, b)
 
 }
 
-// POST /api/bookings/{id}/return
+
 func (h *Handler) Return(w http.ResponseWriter, r *http.Request) {
 	bookingID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil{
@@ -195,7 +309,22 @@ func (h *Handler) Handover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	b, err := h.repo.HandoverRent(r.Context(), bookingID, actorID, time.Now().UTC())
+	b0, err := h.repo.GetByID(r.Context(), bookingID)
+	if err != nil {
+		writeBookingError(w, "get booking", err)
+		return
+	}
+
+	var b Booking
+	switch b0.Type {
+	case TypeRent:
+		b, err = h.repo.HandoverRent(r.Context(), bookingID, actorID, time.Now().UTC())
+	case TypeBuy, TypeGive:
+		b, err = h.repo.HandoverTransfer(r.Context(), bookingID, actorID, time.Now().UTC())
+	default:
+		httpx.WriteError(w, http.StatusBadRequest, "invalid type")
+		return
+	}
 	if err != nil {
 		writeBookingError(w, "handover", err)
 		return
@@ -217,50 +346,51 @@ func (h *Handler) Cancel(w http.ResponseWriter, r *http.Request){
 		return
 	}
 
-	b, err := h.repo.CancelRent(r.Context(), bookingID,requesterID)
-	if err!= nil{
+	b0, err := h.repo.GetByID(r.Context(), bookingID)
+	if err != nil {
+		writeBookingError(w, "get booking", err)
+		return
+	}
+	if b0.RequesterID != requesterID {
+		httpx.WriteError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
+	var b Booking
+	switch b0.Type {
+	case TypeRent:
+		b, err = h.repo.CancelRent(r.Context(), bookingID, requesterID)
+	case TypeBuy, TypeGive:
+		b, err = h.repo.CancelTransfer(r.Context(), bookingID, requesterID)
+	default:
+		httpx.WriteError(w, http.StatusBadRequest, "invalid type")
+		return
+	}
+	if err != nil {
 		writeBookingError(w, "cancel", err)
 		return
 	}
+
 	httpx.WriteJSON(w, http.StatusOK, b)
 }
 
 
 func (h *Handler) ListMyBookings(w http.ResponseWriter, r *http.Request){
 	requesterID, ok := auth.UserIDFromContext(r.Context())
-	if !ok{
+	if !ok {
 		httpx.WriteError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 
-	q:= r.URL.Query()
-
-	limit:= 20
-	if v := q.Get("limit"); v!=""{
-		n, err := strconv.Atoi(v)
-		if err!= nil||n<=0{
-			httpx.WriteError(w, http.StatusBadRequest, "invalid limit")
-			return
-		}
-		if n>100{
-			n =100
-		}
-		limit = n
-	}
-
-	offset:=0
-	if v:=q.Get("offset"); v!=""{
-		n, err := strconv.Atoi(v)
-		if err!= nil||n<0{
-			httpx.WriteError(w, http.StatusBadRequest, "invalid offset")
-			return
-		}
-		offset = n
-	}
-	
-	statuses, err := parseStatuses(q["status"])
+	statuses, err := parseStatuses(r)
 	if err != nil {
-		httpx.WriteError(w, http.StatusBadRequest, err.Error())
+		httpx.WriteError(w, http.StatusBadRequest, "invalid status")
+		return
+	}
+
+	limit, offset, err := parseLimitOffset(r)
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid limit/offset")
 		return
 	}
 
@@ -270,7 +400,11 @@ func (h *Handler) ListMyBookings(w http.ResponseWriter, r *http.Request){
 		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, out)
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+		"items":  out,
+		"limit":  limit,
+		"offset": offset,
+	})
 }
 
 
@@ -281,34 +415,20 @@ func (h *Handler) ListMyItemsBookings(w http.ResponseWriter, r *http.Request){
 		return
 	}
 
-	q:= r.URL.Query()
-
-	limit:= 20
-	if v := q.Get("limit"); v!=""{
-		n, err := strconv.Atoi(v)
-		if err!= nil||n<=0{
-			httpx.WriteError(w, http.StatusBadRequest, "invalid limit")
-			return
-		}
-		if n>100{
-			n =100
-		}
-		limit = n
+	if !ok {
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthorized")
+		return
 	}
 
-	offset:=0
-	if v:=q.Get("offset"); v!=""{
-		n, err := strconv.Atoi(v)
-		if err!= nil||n<0{
-			httpx.WriteError(w, http.StatusBadRequest, "invalid offset")
-			return
-		}
-		offset = n
-	}
-	
-	statuses, err := parseStatuses(q["status"])
+	statuses, err := parseStatuses(r)
 	if err != nil {
-		httpx.WriteError(w, http.StatusBadRequest, err.Error())
+		httpx.WriteError(w, http.StatusBadRequest, "invalid status")
+		return
+	}
+
+	limit, offset, err := parseLimitOffset(r)
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid limit/offset")
 		return
 	}
 
@@ -318,7 +438,11 @@ func (h *Handler) ListMyItemsBookings(w http.ResponseWriter, r *http.Request){
 		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, out)
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+		"items":  out,
+		"limit":  limit,
+		"offset": offset,
+	})
 }
 
 
@@ -401,27 +525,75 @@ func writeBookingError(w http.ResponseWriter, op string, err error) {
 }
 
 
-func parseStatuses(values []string)([]Status, error){
-	if len(values) == 0{
+func parseLimitOffset(r *http.Request)(limit, offset int, err error){
+	q:= r.URL.Query()
+	
+	limit = 20
+	offset = 0
+
+	if s:=q.Get("limit");s!=""{
+		v, e:= strconv.Atoi(s)
+		if e!=nil{
+			return 0, 0, e
+		}
+		limit = v
+	}
+
+	if s := q.Get("offset"); s != "" {
+		v, e := strconv.Atoi(s)
+		if e != nil {
+			return 0, 0, e
+		}
+		offset = v
+	}
+	return limit, offset, nil
+}
+
+func parseStatuses(r *http.Request)([]Status, error){
+	q:=r.URL.Query()
+
+	raw:=q["status"]
+	if len(raw)==0{
+		if s := q.Get("status"); s!=""{
+			raw = []string{s}
+		}
+	}
+	if len(raw) == 0{
 		return nil, nil
 	}
 
-	out := make([]Status, 0, len(values))
-	for _, v := range values{
-		switch Status(v){
-			case StatusRequested,
-			StatusApproved,
-			StatusHandoverPending,
-			StatusInUse,
-			StatusReturnPending,
-			StatusCompleted,
-			StatusDeclined,
-			StatusCanceled,
-			StatusExpired:
-			out = append(out, Status(v))
-		default:
-			return nil, errors.New("invalid status: " + v)
+	var out []Status
+	for _, part := range raw{
+		for _, token := range strings.Split(part,","){
+			s := strings.TrimSpace(token)
+			if s ==""{
+				continue
+			}
+			st := Status(s)
+			if !isValidStatus(st){
+				return nil, ErrInvalidState
+			}
+			out = append(out, st)
 		}
 	}
 	return out, nil
+}
+
+
+
+func isValidStatus(s Status) bool {
+	switch s {
+	case StatusRequested,
+		StatusApproved,
+		StatusHandoverPending,
+		StatusInUse,
+		StatusReturnPending,
+		StatusCompleted,
+		StatusDeclined,
+		StatusCanceled,
+		StatusExpired:
+		return true
+	default:
+		return false
+	}
 }

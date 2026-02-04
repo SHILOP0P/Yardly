@@ -187,7 +187,7 @@ func (r *Repo) ListMyItems(ctx context.Context, ownerID int64, limit, offset int
 	SELECT id, owner_id, title, status, mode
 	FROM items
 	WHERE owner_id = $1
-	AND status <> 'deleted'
+	AND status NOT IN ('deleted','transferred')
 	ORDER BY id DESC
 	LIMIT $2 OFFSET $3
 	`

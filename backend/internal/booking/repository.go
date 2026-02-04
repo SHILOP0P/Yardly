@@ -23,4 +23,10 @@ type Repo interface{
 
 	ListEvents(ctx context.Context, bookingID int64, limit, offset int) ([]Event, error)
 
+	//Transfer
+	ApproveTransfer(ctx context.Context, bookingID int64, ownerID int64, now time.Time) (Booking, error)
+	HandoverTransfer(ctx context.Context, bookingID int64, actorID int64, now time.Time) (Booking, error)
+	CancelTransfer(ctx context.Context, bookingID, requesterID int64) (Booking, error)
+
+
 }

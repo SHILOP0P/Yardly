@@ -7,6 +7,7 @@ const (
 	StatusInUse    Status = "in_use"
 	StatusArchived Status = "archived"
 	StatusDeleted  Status = "deleted"
+	StatusTransferred Status = "transferred"
 )
 
 type DealMode string
