@@ -83,6 +83,18 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request){
 		return
 	}
 
+	switch it.Status {
+	case "active", "in_use":
+		// ok
+	case "archived", "deleted", "transferred":
+		httpx.WriteError(w, http.StatusConflict, "item is not available")
+		return
+	default:
+		httpx.WriteError(w, http.StatusConflict, "item is not available")
+		return
+	}
+
+
 	ownerID := it.OwnerID
 	if ownerID == requesterID {
 		httpx.WriteError(w, http.StatusBadRequest, "cannot book your own item")

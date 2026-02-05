@@ -15,9 +15,10 @@ import (
 	"github.com/SHILOP0P/Yardly/backend/internal/auth"
 	"github.com/SHILOP0P/Yardly/backend/internal/booking"
 	"github.com/SHILOP0P/Yardly/backend/internal/item"
+	"github.com/SHILOP0P/Yardly/backend/internal/favorite"
 )
 
-func New(port string, pool *pgxpool.Pool,itemsRepo *itempg.Repo, bookingRepo *bookingpg.Repo, userRepo *userpg.Repo, refreshesRepo *auth.RefreshRepo, jwtSvc *auth.JWT, refreshTTL time.Duration) *http.Server{
+func New(port string, pool *pgxpool.Pool,itemsRepo *itempg.Repo, bookingRepo *bookingpg.Repo, userRepo *userpg.Repo, refreshesRepo *auth.RefreshRepo, favoriteRepo favorite.Repo, jwtSvc *auth.JWT, refreshTTL time.Duration) *http.Server{
 	mux := http.NewServeMux()
 
 	RegisterBaseRotes(mux)
@@ -25,12 +26,10 @@ func New(port string, pool *pgxpool.Pool,itemsRepo *itempg.Repo, bookingRepo *bo
 	authMw := auth.Middleware(jwtSvc)
 
 	item.RegisterRoutes(mux, itemsRepo, authMw)
-
 	booking.RegisterRoutes(mux, bookingRepo, itemsRepo, authMw)
-
 	user.RegisterRoutes(mux, authMw, userRepo, jwtSvc)
-
 	auth.RegisterRoutes(mux, jwtSvc, refreshesRepo, refreshTTL, userRepo, authMw)
+	favorite.RegisterRoutes(mux, favoriteRepo, authMw)
 
 	return &http.Server{
 		Addr: ":" + port,

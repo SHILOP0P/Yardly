@@ -30,7 +30,7 @@ type Item struct {
 
 func (s Status) Valid() bool {
 	switch s{
-	case StatusActive, StatusArchived, StatusDeleted, StatusInUse:
+	case StatusActive, StatusArchived, StatusDeleted, StatusInUse, StatusTransferred:
 		return true
 	default:
 		return false

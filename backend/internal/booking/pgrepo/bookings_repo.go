@@ -15,17 +15,16 @@ import (
 )
 
 type Repo struct {
-	pool *pgxpool.Pool
+	pool      *pgxpool.Pool
 	eventRepo *EventRepo
 }
 
 func New(pool *pgxpool.Pool, eventRepo *EventRepo) *Repo {
-    return &Repo{
-        pool:      pool,
-        eventRepo: eventRepo,
-    }
+	return &Repo{
+		pool:      pool,
+		eventRepo: eventRepo,
+	}
 }
-
 
 const selectBookingCols = `
 	id, item_id, requester_id, owner_id,
@@ -39,11 +38,11 @@ const selectBookingCols = `
 	created_at
 `
 
-type rowScanrer interface{
+type rowScanrer interface {
 	Scan(dest ...any) error
 }
 
-func scanBooking(rs rowScanrer, b *booking.Booking)error{
+func scanBooking(rs rowScanrer, b *booking.Booking) error {
 	return rs.Scan(
 		&b.ID,
 		&b.ItemID,
@@ -61,8 +60,6 @@ func scanBooking(rs rowScanrer, b *booking.Booking)error{
 		&b.CreatedAt,
 	)
 }
-
-
 
 func (r *Repo) Create(ctx context.Context, b *booking.Booking) error {
 	// created_at ставится DEFAULT now() в таблице
@@ -93,7 +90,7 @@ RETURNING id, created_at
 
 	if err != nil {
 		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505"{
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return booking.ErrDuplicateActiveRequest
 		}
 		return err
@@ -110,19 +107,19 @@ WHERE id = $1
 	var b booking.Booking
 	err := r.pool.QueryRow(ctx, q, id).Scan(
 		&b.ID,
-    &b.ItemID,
-    &b.RequesterID,
-    &b.OwnerID,
-    &b.Type,
-    &b.Status,
-    &b.Start,
-    &b.End,
-    &b.HandoverDeadline,
-    &b.HandoverConfirmedByOwnerAt,
-    &b.HandoverConfirmedByRequesterAt,
-    &b.ReturnConfirmedByOwnerAt,
-    &b.ReturnConfirmedByRequesterAt,
-    &b.CreatedAt,
+		&b.ItemID,
+		&b.RequesterID,
+		&b.OwnerID,
+		&b.Type,
+		&b.Status,
+		&b.Start,
+		&b.End,
+		&b.HandoverDeadline,
+		&b.HandoverConfirmedByOwnerAt,
+		&b.HandoverConfirmedByRequesterAt,
+		&b.ReturnConfirmedByOwnerAt,
+		&b.ReturnConfirmedByRequesterAt,
+		&b.CreatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -151,19 +148,19 @@ ORDER BY id DESC
 		var b booking.Booking
 		if err := rows.Scan(
 			&b.ID,
-		&b.ItemID,
-		&b.RequesterID,
-		&b.OwnerID,
-		&b.Type,
-		&b.Status,
-		&b.Start,
-		&b.End,
-		&b.HandoverDeadline,
-		&b.HandoverConfirmedByOwnerAt,
-		&b.HandoverConfirmedByRequesterAt,
-		&b.ReturnConfirmedByOwnerAt,
-		&b.ReturnConfirmedByRequesterAt,
-		&b.CreatedAt,
+			&b.ItemID,
+			&b.RequesterID,
+			&b.OwnerID,
+			&b.Type,
+			&b.Status,
+			&b.Start,
+			&b.End,
+			&b.HandoverDeadline,
+			&b.HandoverConfirmedByOwnerAt,
+			&b.HandoverConfirmedByRequesterAt,
+			&b.ReturnConfirmedByOwnerAt,
+			&b.ReturnConfirmedByRequesterAt,
+			&b.CreatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("bookings pgrepo: list by item scan: %w", err)
 		}
@@ -176,136 +173,7 @@ ORDER BY id DESC
 	return out, nil
 }
 
-func (r *Repo) ApproveRent(ctx context.Context, bookingID int64, ownerID int64)(booking.Booking, error){
-	tx, err := r.pool.BeginTx(ctx,pgx.TxOptions{})
-	if err != nil{
-		return booking.Booking{}, fmt.Errorf("bookings pgrepo: begin tx: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
-	const selectQ = `
-	SELECT ` + selectBookingCols + `
-	FROM bookings
-	WHERE id = $1
-	FOR UPDATE
-	`
-	var b booking.Booking
-	err = tx.QueryRow(ctx, selectQ, bookingID).Scan(
-		&b.ID,
-		&b.ItemID,
-		&b.RequesterID,
-		&b.OwnerID,
-		&b.Type,
-		&b.Status,
-		&b.Start,
-		&b.End,
-		&b.HandoverDeadline,
-		&b.HandoverConfirmedByOwnerAt,
-		&b.HandoverConfirmedByRequesterAt,
-		&b.ReturnConfirmedByOwnerAt,
-		&b.ReturnConfirmedByRequesterAt,
-		&b.CreatedAt,
-	)
-	if err != nil{
-		if errors.Is(err,pgx.ErrNoRows){
-			return  booking.Booking{}, booking.ErrNotFound
-		}
-		return booking.Booking{}, fmt.Errorf("bookings pgrepo: approve select: %w", err)
-	}
-	if b.OwnerID != ownerID {
-		return booking.Booking{}, booking.ErrForbidden
-	}
-	if b.Type != booking.TypeRent{
-		return booking.Booking{}, booking.ErrInvalidState
-	}
-	if b.Status != booking.StatusRequested {
-		return booking.Booking{}, booking.ErrInvalidState
-	}
-	if b.Start == nil || b.End == nil {
-		return booking.Booking{}, fmt.Errorf("rent booking must have start/end")
-	}
-
-	dedline := b.Start.Add(24*time.Hour)
-
-	const declineQ = `
-UPDATE bookings
-SET status = $1
-WHERE item_id = $2
-  AND type = $3
-  AND status = $4
-  AND id <> $5
-  AND start_at < $6
-  AND end_at   > $7
-  RETURNING id
-`
-	rows, err := tx.Query(ctx, declineQ,
-		booking.StatusDeclined,
-		b.ItemID,
-		booking.TypeRent,
-		booking.StatusRequested,
-		b.ID,
-		*b.End,
-		*b.Start,
-	)
-	if err != nil{
-		return  booking.Booking{}, fmt.Errorf("bookings pgrepo: decline competitors: %w", err)
-	}
-	defer rows.Close()
-
-	declinedIDs:=make([]int64, 0, 8)
-	for rows.Next(){
-		var id int64
-		if err:= rows.Scan(&id); err!=nil{
-			return booking.Booking{}, fmt.Errorf("bookings pgrepo: decline competitors scan: %w", err)
-		}
-		declinedIDs = append(declinedIDs, id)
-	}
-	if err:=rows.Err();err!=nil{
-		return booking.Booking{}, fmt.Errorf("bookings pgrepo: decline competitors rows: %w", err)
-	}
-
-	const approveQ = `
-	UPDATE bookings
-	SET status = $1,
-		handover_deadline = $2
-	WHERE id = $3
-	RETURNING status, handover_deadline
-	`
-	err = tx.QueryRow(ctx, approveQ, booking.StatusApproved, dedline, b.ID).Scan(&b.Status,&b.HandoverDeadline)
-	if err!=nil{
-		if errors.Is(err, pgx.ErrNoRows) {
-			// теоретически редкий кейс, но пусть будет
-			return booking.Booking{}, booking.ErrNotFound
-		}
-		return booking.Booking{}, err
-	}
-
-	actor := ownerID
-	fromApproved:=booking.StatusRequested
-	toApproved := booking.StatusApproved
-
-	if err :=r.eventRepo.InsertBookingEvent(ctx, tx, b.ID, &actor, "approve", &fromApproved, &toApproved, nil); err != nil {
-		return booking.Booking{}, err
-	}
-
-	fromDecl := booking.StatusRequested
-	toDecl := booking.StatusDeclined
-
-	for _, id := range declinedIDs {
-		// meta можно не делать, но полезно
-		if err := r.eventRepo.InsertBookingEvent(ctx, tx, id, &actor, "auto_decline_competitor", &fromDecl, &toDecl, nil); err != nil {
-			return booking.Booking{}, err
-		}
-	}
-
-	if err :=tx.Commit(ctx); err!=nil{
-		return booking.Booking{}, fmt.Errorf("bookings pgrepo: commit: %w", err)
-	}
-	return b, nil
-
-}
-
-func (r *Repo) ReturnRent(ctx context.Context, bookingID int64, actorID int64, now time.Time)(booking.Booking, error){
+func (r *Repo) ApproveRent(ctx context.Context, bookingID int64, ownerID int64) (booking.Booking, error) {
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return booking.Booking{}, fmt.Errorf("bookings pgrepo: begin tx: %w", err)
@@ -335,22 +203,151 @@ func (r *Repo) ReturnRent(ctx context.Context, bookingID int64, actorID int64, n
 		&b.ReturnConfirmedByRequesterAt,
 		&b.CreatedAt,
 	)
-	if err != nil{
-		if errors.Is(err, pgx.ErrNoRows){
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return booking.Booking{}, booking.ErrNotFound
+		}
+		return booking.Booking{}, fmt.Errorf("bookings pgrepo: approve select: %w", err)
+	}
+	if b.OwnerID != ownerID {
+		return booking.Booking{}, booking.ErrForbidden
+	}
+	if b.Type != booking.TypeRent {
+		return booking.Booking{}, booking.ErrInvalidState
+	}
+	if b.Status != booking.StatusRequested {
+		return booking.Booking{}, booking.ErrInvalidState
+	}
+	if b.Start == nil || b.End == nil {
+		return booking.Booking{}, fmt.Errorf("rent booking must have start/end")
+	}
+
+	dedline := b.Start.Add(24 * time.Hour)
+
+	const declineQ = `
+UPDATE bookings
+SET status = $1
+WHERE item_id = $2
+  AND type = $3
+  AND status = $4
+  AND id <> $5
+  AND start_at < $6
+  AND end_at   > $7
+  RETURNING id
+`
+	rows, err := tx.Query(ctx, declineQ,
+		booking.StatusDeclined,
+		b.ItemID,
+		booking.TypeRent,
+		booking.StatusRequested,
+		b.ID,
+		*b.End,
+		*b.Start,
+	)
+	if err != nil {
+		return booking.Booking{}, fmt.Errorf("bookings pgrepo: decline competitors: %w", err)
+	}
+	defer rows.Close()
+
+	declinedIDs := make([]int64, 0, 8)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return booking.Booking{}, fmt.Errorf("bookings pgrepo: decline competitors scan: %w", err)
+		}
+		declinedIDs = append(declinedIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return booking.Booking{}, fmt.Errorf("bookings pgrepo: decline competitors rows: %w", err)
+	}
+
+	const approveQ = `
+	UPDATE bookings
+	SET status = $1,
+		handover_deadline = $2
+	WHERE id = $3
+	RETURNING status, handover_deadline
+	`
+	err = tx.QueryRow(ctx, approveQ, booking.StatusApproved, dedline, b.ID).Scan(&b.Status, &b.HandoverDeadline)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// теоретически редкий кейс, но пусть будет
+			return booking.Booking{}, booking.ErrNotFound
+		}
+		return booking.Booking{}, err
+	}
+
+	actor := ownerID
+	fromApproved := booking.StatusRequested
+	toApproved := booking.StatusApproved
+
+	if err := r.eventRepo.InsertBookingEvent(ctx, tx, b.ID, &actor, "approve", &fromApproved, &toApproved, nil); err != nil {
+		return booking.Booking{}, err
+	}
+
+	fromDecl := booking.StatusRequested
+	toDecl := booking.StatusDeclined
+
+	for _, id := range declinedIDs {
+		// meta можно не делать, но полезно
+		if err := r.eventRepo.InsertBookingEvent(ctx, tx, id, &actor, "auto_decline_competitor", &fromDecl, &toDecl, nil); err != nil {
+			return booking.Booking{}, err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return booking.Booking{}, fmt.Errorf("bookings pgrepo: commit: %w", err)
+	}
+	return b, nil
+
+}
+
+func (r *Repo) ReturnRent(ctx context.Context, bookingID int64, actorID int64, now time.Time) (booking.Booking, error) {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return booking.Booking{}, fmt.Errorf("bookings pgrepo: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	const selectQ = `
+	SELECT ` + selectBookingCols + `
+	FROM bookings
+	WHERE id = $1
+	FOR UPDATE
+	`
+	var b booking.Booking
+	err = tx.QueryRow(ctx, selectQ, bookingID).Scan(
+		&b.ID,
+		&b.ItemID,
+		&b.RequesterID,
+		&b.OwnerID,
+		&b.Type,
+		&b.Status,
+		&b.Start,
+		&b.End,
+		&b.HandoverDeadline,
+		&b.HandoverConfirmedByOwnerAt,
+		&b.HandoverConfirmedByRequesterAt,
+		&b.ReturnConfirmedByOwnerAt,
+		&b.ReturnConfirmedByRequesterAt,
+		&b.CreatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return booking.Booking{}, booking.ErrNotFound
 		}
 		return booking.Booking{}, fmt.Errorf("bookings pgrepo: return select: %w", err)
 	}
-	if b.Type != booking.TypeRent{
+	if b.Type != booking.TypeRent {
 		return booking.Booking{}, booking.ErrInvalidState
 	}
-	if actorID!=b.OwnerID&&actorID!=b.RequesterID{
+	if actorID != b.OwnerID && actorID != b.RequesterID {
 		return booking.Booking{}, booking.ErrForbidden
 	}
-	if actorID==b.OwnerID&&actorID==b.RequesterID{
+	if actorID == b.OwnerID && actorID == b.RequesterID {
 		return booking.Booking{}, booking.ErrInvalidState
 	}
-	if b.Status!=booking.StatusInUse&&b.Status!=booking.StatusReturnPending{
+	if b.Status != booking.StatusInUse && b.Status != booking.StatusReturnPending {
 		return booking.Booking{}, booking.ErrInvalidState
 	}
 	if actorID == b.OwnerID && b.ReturnConfirmedByOwnerAt == nil {
@@ -399,10 +396,9 @@ func (r *Repo) ReturnRent(ctx context.Context, bookingID int64, actorID int64, n
 		return booking.Booking{}, err
 	}
 
-
 	if b.ReturnConfirmedByOwnerAt != nil && b.ReturnConfirmedByRequesterAt != nil {
 		from := b.Status
-				
+
 		const updStatus = `
 		UPDATE bookings
 		SET status = $1
@@ -433,7 +429,7 @@ func (r *Repo) ReturnRent(ctx context.Context, bookingID int64, actorID int64, n
 			return booking.Booking{}, err
 		}
 
-		if err := syncItemStatusTx(ctx, tx, b.ItemID); err != nil{
+		if err := syncItemStatusTx(ctx, tx, b.ItemID); err != nil {
 			return booking.Booking{}, err
 		}
 	}
@@ -441,17 +437,16 @@ func (r *Repo) ReturnRent(ctx context.Context, bookingID int64, actorID int64, n
 	if err := tx.Commit(ctx); err != nil {
 		return booking.Booking{}, fmt.Errorf("bookings pgrepo: commit: %w", err)
 	}
-	return b, nil	
+	return b, nil
 }
 
 func (r *Repo) HandoverRent(ctx context.Context, bookingID int64, actorID int64, now time.Time) (booking.Booking, error) {
-	
+
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return booking.Booking{}, fmt.Errorf("bookings pgrepo: begin tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
-
 
 	// Если дедлайн прошёл — НЕ переводим в in_use.
 	// Это защищает инвариант "только в течение 24 часов".
@@ -485,22 +480,22 @@ func (r *Repo) HandoverRent(ctx context.Context, bookingID int64, actorID int64,
 		}
 		return booking.Booking{}, fmt.Errorf("bookings pgrepo: handover: %w", err)
 	}
-	if b.Type!=booking.TypeRent{
+	if b.Type != booking.TypeRent {
 		return booking.Booking{}, booking.ErrInvalidState
 	}
-	if actorID!=b.OwnerID&&actorID!=b.RequesterID{
+	if actorID != b.OwnerID && actorID != b.RequesterID {
 		return booking.Booking{}, booking.ErrForbidden
 	}
-	if actorID==b.OwnerID&&actorID==b.RequesterID{
+	if actorID == b.OwnerID && actorID == b.RequesterID {
 		return booking.Booking{}, booking.ErrInvalidState
 	}
-	if b.Status!= booking.StatusApproved{
+	if b.Status != booking.StatusApproved {
 		return booking.Booking{}, booking.ErrInvalidState
 	}
-	if b.HandoverDeadline == nil || now.After(*b.HandoverDeadline){
+	if b.HandoverDeadline == nil || now.After(*b.HandoverDeadline) {
 		return booking.Booking{}, booking.ErrInvalidState
 	}
-	if actorID == b.OwnerID&&b.HandoverConfirmedByOwnerAt == nil{
+	if actorID == b.OwnerID && b.HandoverConfirmedByOwnerAt == nil {
 		b.HandoverConfirmedByOwnerAt = &now
 	}
 	if actorID == b.RequesterID && b.HandoverConfirmedByRequesterAt == nil {
@@ -526,14 +521,14 @@ func (r *Repo) HandoverRent(ctx context.Context, bookingID int64, actorID int64,
 		return booking.Booking{}, fmt.Errorf("bookings pgrepo: handover update marks: %w", err)
 	}
 
-	actor:= actorID
+	actor := actorID
 	by := "requester"
-	if actorID == b.OwnerID{
+	if actorID == b.OwnerID {
 		by = "owner"
 	}
-	meta, _:=json.Marshal(map[string]string{"by":by})
-	
-	if err :=r.eventRepo.InsertBookingEvent(ctx, tx,
+	meta, _ := json.Marshal(map[string]string{"by": by})
+
+	if err := r.eventRepo.InsertBookingEvent(ctx, tx,
 		b.ID,
 		&actor,
 		"handover_confirm",
@@ -563,7 +558,7 @@ func (r *Repo) HandoverRent(ctx context.Context, bookingID int64, actorID int64,
 		}
 
 		to := b.Status
-		if err :=r.eventRepo.InsertBookingEvent(ctx, tx,
+		if err := r.eventRepo.InsertBookingEvent(ctx, tx,
 			b.ID,
 			&actor,
 			"status_change",
@@ -574,12 +569,12 @@ func (r *Repo) HandoverRent(ctx context.Context, bookingID int64, actorID int64,
 			return booking.Booking{}, err
 		}
 
-		if err := syncItemStatusTx(ctx, tx, b.ItemID); err != nil{
+		if err := syncItemStatusTx(ctx, tx, b.ItemID); err != nil {
 			return booking.Booking{}, err
 		}
 	}
-	
-	if err:=tx.Commit(ctx); err!=nil{
+
+	if err := tx.Commit(ctx); err != nil {
 		return booking.Booking{}, fmt.Errorf("bookings pgrepo: commit: %w", err)
 	}
 
@@ -587,36 +582,38 @@ func (r *Repo) HandoverRent(ctx context.Context, bookingID int64, actorID int64,
 }
 
 func (r *Repo) ExpireOverdueHandovers(ctx context.Context, now time.Time) (int64, error) {
-	tx, err:= r.pool.BeginTx(ctx, pgx.TxOptions{})
-	if err!=nil{
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
 		return 0, fmt.Errorf("bookings pgrepo: begin tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	types := []string{string(booking.TypeRent), string(booking.TypeBuy), string(booking.TypeGive)}
 
 	q := `
 	UPDATE bookings
 	SET status = $1
-	WHERE type = $2
-	AND status = $3
-	AND handover_deadline IS NOT NULL
-	AND handover_deadline < $4
+	WHERE type = ANY($2::text[])
+	  AND status = $3
+	  AND handover_deadline IS NOT NULL
+	  AND handover_deadline < $4
 	RETURNING id
 	`
-	rows, err := tx.Query(ctx, q, booking.StatusExpired, booking.TypeRent, booking.StatusApproved, now)
+
+	rows, err := tx.Query(ctx, q, booking.StatusExpired, types, booking.StatusApproved, now)
 	if err != nil {
 		return 0, fmt.Errorf("bookings pgrepo: expire query: %w", err)
 	}
 
 	ids := make([]int64, 0, 16)
-	for rows.Next(){
+	for rows.Next() {
 		var id int64
-		if err := rows.Scan(&id); err!=nil{
+		if err := rows.Scan(&id); err != nil {
 			rows.Close()
 			return 0, fmt.Errorf("bookings pgrepo: expire scan: %w", err)
 		}
 		ids = append(ids, id)
 	}
-	if err := rows.Err(); err!=nil{
+	if err := rows.Err(); err != nil {
 		rows.Close()
 		return 0, fmt.Errorf("bookings pgrepo: expire rows: %w", err)
 	}
@@ -625,19 +622,19 @@ func (r *Repo) ExpireOverdueHandovers(ctx context.Context, now time.Time) (int64
 	from := booking.StatusApproved
 	to := booking.StatusExpired
 
-	for _, id:=range ids{
-		if err := r.eventRepo.InsertBookingEvent(ctx, tx, id, nil, "expire", &from, &to, nil); err != nil{
+	for _, id := range ids {
+		if err := r.eventRepo.InsertBookingEvent(ctx, tx, id, nil, "expire", &from, &to, nil); err != nil {
 			return 0, err
 		}
 	}
-	
-	if err:=tx.Commit(ctx); err!=nil{
+
+	if err := tx.Commit(ctx); err != nil {
 		return 0, fmt.Errorf("bookings pgrepo: commit: %w", err)
 	}
 	return int64(len(ids)), nil
 }
 
-func (r *Repo) CancelRent(ctx context.Context, bookingID, requesterID int64)(booking.Booking, error){
+func (r *Repo) CancelRent(ctx context.Context, bookingID, requesterID int64) (booking.Booking, error) {
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return booking.Booking{}, fmt.Errorf("bookings pgrepo: begin tx: %w", err)
@@ -647,18 +644,18 @@ func (r *Repo) CancelRent(ctx context.Context, bookingID, requesterID int64)(boo
 	UPDATE bookings
 	SET status = $3
 	WHERE id = $1 AND requester_id = $2 AND status = $4 AND type = $5
-	RETURNING `+ selectBookingCols + `
+	RETURNING ` + selectBookingCols + `
 	`
 	var out booking.Booking
-	err=scanBooking(tx.QueryRow(ctx,q,
-	bookingID,
+	err = scanBooking(tx.QueryRow(ctx, q,
+		bookingID,
 		requesterID,
 		booking.StatusCanceled,
 		booking.StatusRequested,
 		booking.TypeRent,
 	), &out)
-	if err != nil{
-		if errors.Is(err, pgx.ErrNoRows){
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return booking.Booking{}, r.explainCancelNoRows(ctx, bookingID, requesterID)
 		}
 		return booking.Booking{}, err
@@ -671,24 +668,24 @@ func (r *Repo) CancelRent(ctx context.Context, bookingID, requesterID int64)(boo
 		return booking.Booking{}, err
 	}
 
-	if err:=tx.Commit(ctx); err != nil{
+	if err := tx.Commit(ctx); err != nil {
 		return booking.Booking{}, fmt.Errorf("bookings pgrepo: commit: %w", err)
 	}
 	return out, nil
 }
 
-func(r *Repo) ListMyBookings(ctx context.Context, requesterID int64, statuses[]booking.Status, limit, offset int)([]booking.Booking, error){
-	if limit<=0{
+func (r *Repo) ListMyBookings(ctx context.Context, requesterID int64, statuses []booking.Status, limit, offset int) ([]booking.Booking, error) {
+	if limit <= 0 {
 		limit = 20
 	}
-	if limit>100{
+	if limit > 100 {
 		limit = 100
 	}
-	if offset <0{
+	if offset < 0 {
 		offset = 0
 	}
 	st := make([]string, 0, len(statuses))
-	for _, s:= range statuses{
+	for _, s := range statuses {
 		st = append(st, string(s))
 	}
 
@@ -700,12 +697,12 @@ func(r *Repo) ListMyBookings(ctx context.Context, requesterID int64, statuses[]b
 	var rows pgx.Rows
 	var err error
 
-	if len(st) == 0{
-		const q = base+`ORDER BY created_at DESC, id DESC
+	if len(st) == 0 {
+		const q = base + `ORDER BY created_at DESC, id DESC
 		LIMIT $2 OFFSET $3
 		`
 		rows, err = r.pool.Query(ctx, q, requesterID, limit, offset)
-	} else{
+	} else {
 		const q = base + `
 			AND status = ANY($2::text[])
 			ORDER BY created_at DESC, id DESC
@@ -713,38 +710,37 @@ func(r *Repo) ListMyBookings(ctx context.Context, requesterID int64, statuses[]b
 			`
 		rows, err = r.pool.Query(ctx, q, requesterID, st, limit, offset)
 	}
-	if err != nil{
+	if err != nil {
 		return nil, fmt.Errorf("bookings pgrepo: list my bookings: %w", err)
 	}
 	defer rows.Close()
 
 	out := make([]booking.Booking, 0, limit)
-	for rows.Next(){
+	for rows.Next() {
 		var b booking.Booking
-		if err:= scanBooking(rows, &b); err != nil {
+		if err := scanBooking(rows, &b); err != nil {
 			return nil, fmt.Errorf("bookings pgrepo: list my bookings scan: %w", err)
 		}
 		out = append(out, b)
 	}
-	if err := rows.Err(); err != nil{
+	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("bookings pgrepo: list my bookings rows: %w", err)
 	}
 	return out, nil
 }
 
-
-func(r *Repo) ListMyItemsBookings(ctx context.Context, ownerID int64, statuses[]booking.Status, limit, offset int)([]booking.Booking, error){
-	if limit<=0{
+func (r *Repo) ListMyItemsBookings(ctx context.Context, ownerID int64, statuses []booking.Status, limit, offset int) ([]booking.Booking, error) {
+	if limit <= 0 {
 		limit = 20
 	}
-	if limit>100{
+	if limit > 100 {
 		limit = 100
 	}
-	if offset <0{
+	if offset < 0 {
 		offset = 0
 	}
 	st := make([]string, 0, len(statuses))
-	for _, s:= range statuses{
+	for _, s := range statuses {
 		st = append(st, string(s))
 	}
 
@@ -756,12 +752,12 @@ func(r *Repo) ListMyItemsBookings(ctx context.Context, ownerID int64, statuses[]
 	var rows pgx.Rows
 	var err error
 
-	if len(st) == 0{
-		const q = base+`ORDER BY created_at DESC, id DESC
+	if len(st) == 0 {
+		const q = base + `ORDER BY created_at DESC, id DESC
 		LIMIT $2 OFFSET $3
 		`
 		rows, err = r.pool.Query(ctx, q, ownerID, limit, offset)
-	} else{
+	} else {
 		const q = base + `
 			AND status = ANY($2::text[])
 			ORDER BY created_at DESC, id DESC
@@ -769,33 +765,30 @@ func(r *Repo) ListMyItemsBookings(ctx context.Context, ownerID int64, statuses[]
 			`
 		rows, err = r.pool.Query(ctx, q, ownerID, st, limit, offset)
 	}
-	if err != nil{
+	if err != nil {
 		return nil, fmt.Errorf("bookings pgrepo: list my bookings: %w", err)
 	}
 	defer rows.Close()
 
 	out := make([]booking.Booking, 0, limit)
-	for rows.Next(){
+	for rows.Next() {
 		var b booking.Booking
-		if err:=scanBooking(rows, &b); err != nil {
+		if err := scanBooking(rows, &b); err != nil {
 			return nil, fmt.Errorf("bookings pgrepo: list my bookings scan: %w", err)
 		}
 		out = append(out, b)
 	}
-	if err := rows.Err(); err != nil{
+	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("bookings pgrepo: list my bookings rows: %w", err)
 	}
 	return out, nil
 }
 
-
-
-
 //TRANSFER
 
-func (r *Repo) ApproveTransfer(ctx context.Context, bookingID int64, ownerID int64, now time.Time)(booking.Booking, error){
+func (r *Repo) ApproveTransfer(ctx context.Context, bookingID int64, ownerID int64, now time.Time) (booking.Booking, error) {
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
-	if err!=nil{
+	if err != nil {
 		return booking.Booking{}, fmt.Errorf("bookings pgrepo: begin tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
@@ -873,10 +866,10 @@ func (r *Repo) ApproveTransfer(ctx context.Context, bookingID int64, ownerID int
 
 	defer rows.Close()
 
-	declinedIDs := make([]int64, 0, 0)
-	for rows.Next(){
+	declinedIDs := make([]int64, 0)
+	for rows.Next() {
 		var id int64
-		if err:= rows.Scan(&id); err!= nil{
+		if err := rows.Scan(&id); err != nil {
 			return booking.Booking{}, fmt.Errorf("bookings pgrepo: decline transfer scan: %w", err)
 		}
 		declinedIDs = append(declinedIDs, id)
@@ -886,10 +879,10 @@ func (r *Repo) ApproveTransfer(ctx context.Context, bookingID int64, ownerID int
 	}
 
 	actor := ownerID
-	from:= booking.StatusRequested
+	from := booking.StatusRequested
 	to := booking.StatusApproved
 
-	if err:= r.eventRepo.InsertBookingEvent(ctx, tx, bookingID, &actor, "approve_transfer", &from, &to, nil); err!= nil{
+	if err := r.eventRepo.InsertBookingEvent(ctx, tx, bookingID, &actor, "approve_transfer", &from, &to, nil); err != nil {
 		return booking.Booking{}, err
 	}
 
@@ -907,11 +900,9 @@ func (r *Repo) ApproveTransfer(ctx context.Context, bookingID int64, ownerID int
 	return out, nil
 }
 
-
-
-func (r *Repo) HandoverTransfer(ctx context.Context, bookingID, actorID int64, now time.Time)(booking.Booking, error){
+func (r *Repo) HandoverTransfer(ctx context.Context, bookingID, actorID int64, now time.Time) (booking.Booking, error) {
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
-	if err!=nil{
+	if err != nil {
 		return booking.Booking{}, fmt.Errorf("bookings pgrepo: begin tx: %w", err)
 	}
 
@@ -947,13 +938,12 @@ func (r *Repo) HandoverTransfer(ctx context.Context, bookingID, actorID int64, n
 		return booking.Booking{}, booking.ErrForbidden
 	}
 
-
 	// ставим отметку кто подтвердил handover
 	setOwner := (actorID == b.OwnerID)
 	setRequester := (actorID == b.RequesterID)
 
 	newStatus := b.Status
-	if newStatus == booking.StatusApproved{
+	if newStatus == booking.StatusApproved {
 		newStatus = booking.StatusHandoverPending
 	}
 
@@ -983,9 +973,9 @@ func (r *Repo) HandoverTransfer(ctx context.Context, bookingID, actorID int64, n
 
 	actor := actorID
 
-	if out.HandoverConfirmedByOwnerAt != nil && out.HandoverConfirmedByRequesterAt != nil{
-		from:= out.Status
-		to:=booking.StatusCompleted
+	if out.HandoverConfirmedByOwnerAt != nil && out.HandoverConfirmedByRequesterAt != nil {
+		from := out.Status
+		to := booking.StatusCompleted
 
 		const finQ = `
 		UPDATE bookings
@@ -997,14 +987,14 @@ func (r *Repo) HandoverTransfer(ctx context.Context, bookingID, actorID int64, n
 			return booking.Booking{}, fmt.Errorf("bookings pgrepo: complete transfer: %w", err)
 		}
 
-		if err := markItemTransferredTx(ctx, tx, out.ItemID); err != nil{
+		if err := markItemTransferredTx(ctx, tx, out.ItemID); err != nil {
 			return booking.Booking{}, err
 		}
 
-		if err := r.eventRepo.InsertBookingEvent(ctx, tx, bookingID, &actor, "complete_transfer", &from, &to, nil); err!=nil{
+		if err := r.eventRepo.InsertBookingEvent(ctx, tx, bookingID, &actor, "complete_transfer", &from, &to, nil); err != nil {
 			return booking.Booking{}, err
 		}
-	}else {
+	} else {
 		from := b.Status
 		to := out.Status
 		if err := r.eventRepo.InsertBookingEvent(ctx, tx, out.ID, &actor, "handover_transfer_confirm", &from, &to, nil); err != nil {
@@ -1018,7 +1008,7 @@ func (r *Repo) HandoverTransfer(ctx context.Context, bookingID, actorID int64, n
 	return out, nil
 }
 
-func (r *Repo) CancelTransfer(ctx context.Context, bookingID, requesterID int64)(booking.Booking, error){
+func (r *Repo) CancelTransfer(ctx context.Context, bookingID, requesterID int64) (booking.Booking, error) {
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return booking.Booking{}, fmt.Errorf("bookings pgrepo: begin tx: %w", err)
@@ -1049,10 +1039,9 @@ func (r *Repo) CancelTransfer(ctx context.Context, bookingID, requesterID int64)
 		return booking.Booking{}, err
 	}
 
-	actor:= requesterID
+	actor := requesterID
 	from := booking.StatusRequested
 	to := booking.StatusCanceled
-
 
 	if err := r.eventRepo.InsertBookingEvent(ctx, tx, out.ID, &actor, "cancel_transfer", &from, &to, nil); err != nil {
 		return booking.Booking{}, err
@@ -1064,24 +1053,17 @@ func (r *Repo) CancelTransfer(ctx context.Context, bookingID, requesterID int64)
 	return out, nil
 }
 
-
-
-
-
-
-
-
-func syncItemStatusTx(ctx context.Context, tx pgx.Tx, itemID int64) error{
+func syncItemStatusTx(ctx context.Context, tx pgx.Tx, itemID int64) error {
 	const lockItemQ = `SELECT status FROM items WHERE id = $1 FOR UPDATE`
 	var cur string
-	if err := tx.QueryRow(ctx, lockItemQ, itemID).Scan(&cur); err != nil{
+	if err := tx.QueryRow(ctx, lockItemQ, itemID).Scan(&cur); err != nil {
 		return fmt.Errorf("sync item status: get item status: %w", err)
 	}
 	if cur == "archived" || cur == "deleted" {
 		return nil
 	}
 
-	const existsq=`
+	const existsq = `
 	SELECT EXISTS (
 	SELECT 1
 	FROM bookings
@@ -1091,7 +1073,7 @@ func syncItemStatusTx(ctx context.Context, tx pgx.Tx, itemID int64) error{
 	)
 	`
 	var hasActive bool
-	if err := tx.QueryRow(ctx, existsq, itemID).Scan(&hasActive); err!= nil{
+	if err := tx.QueryRow(ctx, existsq, itemID).Scan(&hasActive); err != nil {
 		return fmt.Errorf("sync item status: exists: %w", err)
 	}
 	newStatus := "active"
@@ -1099,22 +1081,19 @@ func syncItemStatusTx(ctx context.Context, tx pgx.Tx, itemID int64) error{
 		newStatus = "in_use"
 	}
 
-	if newStatus == cur{
+	if newStatus == cur {
 		return nil
 	}
 
 	const updateQ = `UPDATE items SET status = $2 WHERE id = $1`
 
-	if _, err := tx.Exec(ctx, updateQ, itemID, newStatus); err != nil{
+	if _, err := tx.Exec(ctx, updateQ, itemID, newStatus); err != nil {
 		return fmt.Errorf("sync item status: update: %w", err)
 	}
 	return nil
 }
 
-
-
-
-func (r *Repo) explainNoRows(ctx context.Context, bookingID, ownerID int64, expectedStatus booking.Status) error{
+func (r *Repo) explainNoRows(ctx context.Context, bookingID, ownerID int64, expectedStatus booking.Status) error {
 	const q = `
 	SELECT owner_id, status
 	FROM bookings
@@ -1125,22 +1104,22 @@ func (r *Repo) explainNoRows(ctx context.Context, bookingID, ownerID int64, expe
 	var dbStatus booking.Status
 
 	err := r.pool.QueryRow(ctx, q, bookingID).Scan(&dbOwnerID, &dbStatus)
-	if err!= nil{
-		if errors.Is(err, pgx.ErrNoRows){
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return booking.ErrNotFound
 		}
 		return err
 	}
-	if dbOwnerID!=ownerID{
+	if dbOwnerID != ownerID {
 		return booking.ErrForbidden
 	}
-	if dbStatus!= expectedStatus{
-		return  booking.ErrInvalidState
+	if dbStatus != expectedStatus {
+		return booking.ErrInvalidState
 	}
 	return booking.ErrInvalidState
 }
 
-func (r *Repo) explainCancelNoRows(ctx context.Context, bookingID, requesterID int64) error{
+func (r *Repo) explainCancelNoRows(ctx context.Context, bookingID, requesterID int64) error {
 	const q = `
 		SELECT requester_id, status, type
 		FROM bookings
@@ -1150,9 +1129,9 @@ func (r *Repo) explainCancelNoRows(ctx context.Context, bookingID, requesterID i
 	var dbStatus booking.Status
 	var dbType booking.Type
 
-	err:=r.pool.QueryRow(ctx, q,bookingID).Scan(&dbRequesterID, &dbStatus, &dbType)
-	if err != nil{
-		if errors.Is(err, pgx.ErrNoRows){
+	err := r.pool.QueryRow(ctx, q, bookingID).Scan(&dbRequesterID, &dbStatus, &dbType)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return booking.ErrNotFound
 		}
 		return err
@@ -1164,37 +1143,26 @@ func (r *Repo) explainCancelNoRows(ctx context.Context, bookingID, requesterID i
 	return booking.ErrInvalidState
 }
 
-
-
-
-
-
-
-
 // FOR EVENT_REPO
 func (r *Repo) ListEvents(ctx context.Context, bookingID int64, limit, offset int) ([]booking.Event, error) {
 	return r.eventRepo.ListBookingEvents(ctx, r.pool, bookingID, limit, offset)
 }
 
-
-
-
-
 //HELPERS
 
-func markItemTransferredTx(ctx context.Context, tx pgx.Tx, itemID int64)error{
+func markItemTransferredTx(ctx context.Context, tx pgx.Tx, itemID int64) error {
 	const lockItemQ = `SELECT status FROM items WHERE id = $1 FOR UPDATE`
 	var cur string
-	if err:= tx.QueryRow(ctx, lockItemQ, itemID).Scan(&cur); err!=nil{
+	if err := tx.QueryRow(ctx, lockItemQ, itemID).Scan(&cur); err != nil {
 		return fmt.Errorf("mark item deleted: get item status: %w", err)
 	}
-	if cur == "archived" || cur == "deleted" || cur == "transferred"{
+	if cur == "archived" || cur == "deleted" || cur == "transferred" {
 		return nil
 	}
 
 	const updateQ = `UPDATE items SET status = 'transferred' WHERE id = $1`
 
-	if _, err := tx.Exec(ctx, updateQ, itemID); err!=nil{
+	if _, err := tx.Exec(ctx, updateQ, itemID); err != nil {
 		return fmt.Errorf("mark item deleted: update: %w", err)
 	}
 	return nil

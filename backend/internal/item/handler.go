@@ -83,6 +83,11 @@ func (h *Handler) GetByID(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if it.Status != StatusActive && it.Status != StatusInUse {
+		httpx.WriteError(w, http.StatusNotFound, "item not found")
+		return
+	}
+
 	httpx.WriteJSON(w, http.StatusOK, it)
 }
 
@@ -95,22 +100,17 @@ func (h *Handler)Create(w http.ResponseWriter, r *http.Request){
 
 	var dto struct {
 		Title  string   `json:"title"`
-        Status Status   `json:"status"`
         Mode   DealMode `json:"mode"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil{
 		httpx.WriteError(w, http.StatusBadRequest, "invalid json body")
         return
 	}
-	if dto.Title == "" || !dto.Status.Valid() || !dto.Mode.Valid(){
-		httpx.WriteError(w, http.StatusBadRequest, "invalid item fields")
-		return
-	}
 
 	it := Item{
 		 OwnerID: ownerID,
         Title:   dto.Title,
-        Status:  dto.Status,
+        Status:  StatusActive,
         Mode:    dto.Mode,
 	}
 	if err := h.repo.Create(r.Context(), &it); err !=nil{

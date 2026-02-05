@@ -15,6 +15,7 @@ import (
 	"github.com/SHILOP0P/Yardly/backend/internal/db"
 	itempg "github.com/SHILOP0P/Yardly/backend/internal/item/pgrepo"
 	userpg "github.com/SHILOP0P/Yardly/backend/internal/user/pgrepo"
+    favoritepg "github.com/SHILOP0P/Yardly/backend/internal/favorite/pgrepo"
 )
 
 func main() {
@@ -64,10 +65,12 @@ func main() {
     itemRepo:= itempg.New(pool)
     userRepo :=userpg.New(pool)
     refreshRepo := auth.NewRefreshRepo(pool, jwtSecret)
+    favoriteRepo := favoritepg.New(pool)
+
     
 
 
-    srv := httpserver.New(port, pool, itemRepo, bookingRepo, userRepo, refreshRepo, jwtSvc, refreshTTL)
+    srv := httpserver.New(port, pool, itemRepo, bookingRepo, userRepo, refreshRepo, favoriteRepo, jwtSvc, refreshTTL)
 
     jobCtx, jobCancel := context.WithCancel(context.Background())
 
