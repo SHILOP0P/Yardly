@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -62,22 +63,52 @@ func scanBooking(rs rowScanrer, b *booking.Booking) error {
 }
 
 func (r *Repo) Create(ctx context.Context, b *booking.Booking) error {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		log.Println("error begin:", err)
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if b.Type == booking.TypeRent {
+		const conflictQ = `
+		SELECT 1
+		FROM bookings
+		WHERE item_id = $1
+		AND type = 'rent'
+		AND status IN ('approved','handover_pending','in_use','return_pending')
+		AND start_at < $3
+		AND end_at   > $2
+		LIMIT 1
+		`
+
+		var one int
+		err := tx.QueryRow(ctx, conflictQ, b.ItemID, *b.Start, *b.End).Scan(&one)
+		if err == nil {
+			return booking.ErrConflict // 409
+		}
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("create rent conflict check: %w", err)
+		}
+
+	}
+
 	// created_at ставится DEFAULT now() в таблице
 	const q = `
-INSERT INTO bookings (
-	item_id, requester_id, owner_id,
-	type, status,
-	start_at, end_at,
-	handover_deadline
-) VALUES (
-	$1, $2, $3,
-	$4, $5,
-	$6, $7,
-	$8
-)
-RETURNING id, created_at
-`
-	err := r.pool.QueryRow(ctx, q,
+	INSERT INTO bookings (
+		item_id, requester_id, owner_id,
+		type, status,
+		start_at, end_at,
+		handover_deadline
+	) VALUES (
+		$1, $2, $3,
+		$4, $5,
+		$6, $7,
+		$8
+	)
+	RETURNING id, created_at
+	`
+	err = tx.QueryRow(ctx, q,
 		b.ItemID,
 		b.RequesterID,
 		b.OwnerID,
@@ -94,6 +125,9 @@ RETURNING id, created_at
 			return booking.ErrDuplicateActiveRequest
 		}
 		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("bookings pgrepo: commit: %w", err)
 	}
 	return nil
 }
@@ -1051,6 +1085,109 @@ func (r *Repo) CancelTransfer(ctx context.Context, bookingID, requesterID int64)
 		return booking.Booking{}, fmt.Errorf("bookings pgrepo: commit: %w", err)
 	}
 	return out, nil
+}
+
+func (r *Repo) ListUpcomingByItem(ctx context.Context, itemID int64, now time.Time, limit int) (*booking.Booking, []booking.Booking, error) {
+	const inUseQ = `
+	SELECT ` + selectBookingCols + `
+	FROM bookings
+	WHERE item_id = $1
+	  AND type = 'rent'
+	  AND status IN ('in_use','return_pending')
+	ORDER BY start_at DESC
+	LIMIT 1
+	`
+	var cur booking.Booking
+	err := scanBooking(r.pool.QueryRow(ctx, inUseQ, itemID), &cur)
+	if err != nil && errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil, fmt.Errorf("bookings pgrepo: list upcoming in_use: %w", err)
+	}
+
+	var inUse *booking.Booking
+	if err == nil {
+		inUse = &cur
+	}
+
+	const upcomingQ = `
+	SELECT ` + selectBookingCols + `
+	FROM bookings
+	WHERE item_id = $1
+	  AND type = 'rent'
+	  AND status = 'approved'
+	  AND start_at IS NOT NULL
+	  AND start_at > $2
+	ORDER BY start_at ASC
+	LIMIT $3
+	`
+
+	rows, err := r.pool.Query(ctx, upcomingQ, itemID, now, limit)
+	if err != nil {
+		return inUse, nil, fmt.Errorf("bookings pgrepo: list upcoming: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]booking.Booking, 0, limit)
+	for rows.Next() {
+		var b booking.Booking
+		if err := scanBooking(rows, &b); err != nil {
+			return inUse, nil, fmt.Errorf("bookings pgrepo: list upcoming scan: %w", err)
+		}
+		out = append(out, b)
+	}
+	if err := rows.Err(); err != nil {
+		return inUse, nil, fmt.Errorf("bookings pgrepo: list upcoming rows: %w", err)
+	}
+
+	return inUse, out, nil
+}
+
+func (r *Repo) ListBusyDaysByItem(ctx context.Context, itemID int64, fromDay, toDay time.Time) ([]booking.DayRange, bool, error) {
+	const inUseQ = `
+	SELECT 1
+	FROM bookings
+	WHERE item_id = $1
+	  AND type = 'rent'
+	  AND status IN ('in_use','return_pending')
+	LIMIT 1
+	`
+	var one int
+	err := r.pool.QueryRow(ctx, inUseQ, itemID).Scan(&one)
+	isInUseNow := err == nil
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return nil, false, fmt.Errorf("busy days inUse: %w", err)
+	}
+
+	const q = `
+	SELECT
+	  GREATEST(start_at::date, $2::date)::text AS start_day,
+	  LEAST(end_at::date, $3::date)::text      AS end_day
+	FROM bookings
+	WHERE item_id = $1
+	  AND type = 'rent'
+	  AND status IN ('approved','handover_pending','in_use','return_pending')
+	  AND start_at < ($3::date + INTERVAL '1 day')
+	  AND end_at   > ($2::date)
+	ORDER BY start_day
+	`
+
+	rows, err := r.pool.Query(ctx, q, itemID, fromDay, toDay)
+	if err != nil {
+		return nil, isInUseNow, fmt.Errorf("busy days query: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]booking.DayRange, 0, 32)
+	for rows.Next() {
+		var dr booking.DayRange
+		if err := rows.Scan(&dr.Start, &dr.End); err != nil {
+			return nil, isInUseNow, fmt.Errorf("busy days scan: %w", err)
+		}
+		out = append(out, dr)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, isInUseNow, fmt.Errorf("busy days rows: %w", err)
+	}
+	return out, isInUseNow, nil
 }
 
 func syncItemStatusTx(ctx context.Context, tx pgx.Tx, itemID int64) error {

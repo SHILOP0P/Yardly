@@ -14,4 +14,8 @@ func RegisterRoutes(mux *http.ServeMux, repo Repo, authMw Middleware) {
 	mux.Handle("GET /api/my/items", authMw(http.HandlerFunc(h.ListMyItems)))
 	mux.HandleFunc("GET /api/users/{id}/items", h.ListByOwnerPublic)
 
+	// Images
+	mux.HandleFunc("GET /api/items/{id}/images", h.ListImages)
+	mux.Handle("POST /api/items/{id}/images", authMw(http.HandlerFunc(h.AddImage)))
+	mux.Handle("DELETE /api/items/{id}/images/{imageId}", authMw(http.HandlerFunc(h.DeleteImage)))
 }

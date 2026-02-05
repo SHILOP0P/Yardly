@@ -1,5 +1,9 @@
 package item
 
+import(
+	"time"
+)
+
 type Status string
 
 const (
@@ -19,12 +23,22 @@ const (
 	DealSaleRent DealMode = "sale_rent"  // продам или сдам
 )
 
+type ItemImage struct {
+	ID        int64     `json:"id"`
+	ItemID    int64     `json:"item_id"`
+	URL       string    `json:"url"`
+	SortOrder int       `json:"sort_order"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 type Item struct {
 	ID     int64  `json:"id"`
 	OwnerID int64 `json:"owner_id"`
 	Title  string `json:"title"`
 	Status Status `json:"status"`
 	Mode   DealMode `json:"mode"`
+
+	Images []ItemImage `json:"images,omitempty"`
 }
 
 

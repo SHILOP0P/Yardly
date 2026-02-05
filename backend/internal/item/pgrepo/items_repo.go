@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -217,4 +218,120 @@ func (r *Repo) ListMyItems(ctx context.Context, ownerID int64, limit, offset int
 	}
 
 	return out, nil
+}
+
+
+//	Images
+
+func (r *Repo) ListImages(ctx context.Context, itemID int64) ([]item.ItemImage, error){
+	const q = `
+	SELECT id, item_id, url, sort_order, created_at
+	FROM item_images
+	WHERE item_id = $1
+	ORDER BY sort_order ASC
+	`
+	rows, err := r.pool.Query(ctx, q, itemID)
+	if err != nil {
+		return nil, fmt.Errorf("items pgrepo: list images: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]item.ItemImage, 0, 8)
+	for rows.Next() {
+		var im item.ItemImage
+		if err := rows.Scan(&im.ID, &im.ItemID, &im.URL, &im.SortOrder, &im.CreatedAt); err != nil {
+			return nil, fmt.Errorf("items pgrepo: list images scan: %w", err)
+		}
+		out = append(out, im)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("items pgrepo: list images rows: %w", err)
+	}
+	return out, nil
+}
+
+func (r *Repo) AddImage(ctx context.Context, itemID int64, url string)(item.ItemImage, error){
+	url = strings.TrimSpace(url)
+	if url ==""{
+		return item.ItemImage{}, fmt.Errorf("items pgrepo: add image: empty url")
+	}
+
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err!= nil{
+		return item.ItemImage{}, fmt.Errorf("items pgrepo: add image begin: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	const nextQ = `
+SELECT COALESCE(MAX(sort_order), 0) + 1
+FROM item_images
+WHERE item_id = $1
+FOR UPDATE
+`
+	var next int
+	if err := tx.QueryRow(ctx, nextQ, itemID).Scan(&next); err != nil {
+		return item.ItemImage{}, fmt.Errorf("items pgrepo: add image next: %w", err)
+	}
+
+	const insQ = `
+	INSERT INTO item_images (item_id, url, sort_order)
+	VALUES ($1, $2, $3)
+	RETURNING id, item_id, url, sort_order, created_at
+	`
+	var im item.ItemImage
+	if err := tx.QueryRow(ctx, insQ, itemID, url, next).Scan(
+		&im.ID, &im.ItemID, &im.URL, &im.SortOrder, &im.CreatedAt,
+	); err != nil {
+		return item.ItemImage{}, fmt.Errorf("items pgrepo: add image insert: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return item.ItemImage{}, fmt.Errorf("items pgrepo: add image commit: %w", err)
+	}
+	return im, nil
+}
+
+func (r *Repo) DeleteImage(ctx context.Context, itemID, imageID int64)error{
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err!=nil{
+		return fmt.Errorf("items pgrepo: delete image begin: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	const selQ = `
+SELECT sort_order
+FROM item_images
+WHERE id = $1 AND item_id = $2
+FOR UPDATE
+`
+	var ord int
+	if err := tx.QueryRow(ctx, selQ, imageID, itemID).Scan(&ord); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return item.ErrNotFound
+		}
+		return fmt.Errorf("items pgrepo: delete image select: %w", err)
+	}
+
+	const delQ = `DELETE FROM item_images WHERE id = $1 AND item_id = $2`
+	ct, err := tx.Exec(ctx, delQ, imageID, itemID)
+	if err != nil {
+		return fmt.Errorf("items pgrepo: delete image delete: %w", err)
+	}
+	if ct.RowsAffected() == 0 {
+		return item.ErrNotFound
+	}
+
+	const shiftQ = `
+UPDATE item_images
+SET sort_order = sort_order - 1
+WHERE item_id = $1 AND sort_order > $2
+`
+	if _, err := tx.Exec(ctx, shiftQ, itemID, ord); err != nil {
+		return fmt.Errorf("items pgrepo: delete image shift: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("items pgrepo: delete image commit: %w", err)
+	}
+	return nil
 }

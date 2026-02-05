@@ -8,4 +8,5 @@ var (
     ErrForbidden    = errors.New("forbidden")
     ErrInvalidState = errors.New("invalid booking status")
 	ErrDuplicateActiveRequest = errors.New("active request already exists")
+    ErrConflict = errors.New("busy date")
 )

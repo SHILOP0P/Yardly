@@ -30,8 +30,8 @@ func NewHandler(repo Repo, items ItemGetter) *Handler{
 }
 
 type createRentRequestDTO struct{
-	Start string `json:"start_at"` // RFC3339, например 2026-01-20T10:00:00Z
-	End   string `json:"end_at"`   // RFC3339
+	Start string `json:"start_at"` // "2006-01-02", например 2026-01-20T10:00:00Z
+	End   string `json:"end_at"`   // "2006-01-02"
 }
 
 type approveResponseDTO struct {
@@ -39,10 +39,32 @@ type approveResponseDTO struct {
 	Declined []Booking `json:"declined"`
 }
 
+type DayRange struct {
+	Start string `json:"start"` // YYYY-MM-DD
+	End   string `json:"end"`   // YYYY-MM-DD
+}
+
+type availabilityResponse struct {
+	ItemID      int64            `json:"item_id"`
+	From        string           `json:"from"`
+	To          string           `json:"to"`
+	Timezone    string           `json:"timezone"`
+	IsInUseNow  bool             `json:"is_in_use_now"`
+	Busy        []DayRange       `json:"busy"`
+}
+
+
 type createBookingRequestDTO struct {
 	Type  string `json:"type"` // "rent" | "buy" | "give"
 	Start string `json:"start_at,omitempty"`
 	End   string `json:"end_at,omitempty"`
+}
+
+type upcomingByItemResponse struct {
+	ItemID         int64    `json:"item_id"`
+	IsInUse        bool     `json:"is_in_use"`
+	CurrentBooking *Booking `json:"current_booking,omitempty"`
+	Upcoming       []Booking `json:"upcoming"`
 }
 
 func (h *Handler) Create(w http.ResponseWriter, r *http.Request){
@@ -110,18 +132,21 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request){
 	}
 
 	if tp == TypeRent{
-		start, err1 := time.Parse(time.RFC3339, dto.Start)
-		end, err2 := time.Parse(time.RFC3339, dto.End)
-		if err1!=nil||err2!=nil{
-			httpx.WriteError(w, http.StatusBadRequest, "start/end must be RFC3339")
+		startDay, err1 := time.Parse("2006-01-02", dto.Start)
+		endDay, err2 := time.Parse("2006-01-02", dto.End)
+		if err1 != nil || err2 != nil {
+			httpx.WriteError(w, http.StatusBadRequest, "start/end must be YYYY-MM-DD")
 			return
 		}
-		if !start.Before(end) {
-			httpx.WriteError(w, http.StatusBadRequest, "start must be before end")
+		if endDay.Before(startDay) {
+			httpx.WriteError(w, http.StatusBadRequest, "end must be >= start")
 			return
 		}
+		start := time.Date(startDay.Year(), startDay.Month(), startDay.Day(), 0, 0, 0, 0, time.UTC)
+		endExclusive := time.Date(endDay.Year(), endDay.Month(), endDay.Day(), 0, 0, 0, 0, time.UTC).Add(24 * time.Hour)
+
 		b.Start = &start
-		b.End = &end
+		b.End = &endExclusive
 	} else {
 		if strings.TrimSpace(dto.Start)!=""||strings.TrimSpace(dto.End)!=""{
 			httpx.WriteError(w, http.StatusBadRequest, "start/end are not allowed for buy/give")
@@ -158,11 +183,11 @@ func (h *Handler) CreateRent(w http.ResponseWriter, r *http.Request){
 		httpx.WriteError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
-	start, err1 := time.Parse(time.RFC3339, dto.Start)
-	end, err2 := time.Parse(time.RFC3339, dto.End)
+	start, err1 := time.Parse("2006-01-02", dto.Start)
+	end, err2 := time.Parse("2006-01-02", dto.End)
 	if err1 != nil || err2 != nil {
-		log.Println("start/end must be RFC3339", err1, err2)
-		httpx.WriteError(w, http.StatusBadRequest, "start/end must be RFC3339")
+		log.Println("start/end must be '2006-01-02'", err1, err2)
+		httpx.WriteError(w, http.StatusBadRequest, "start/end must be '2006-01-02'")
 		return
 	}
 	if !start.Before(end) {
@@ -516,7 +541,74 @@ func (h *Handler) ListEvents(w http.ResponseWriter, r *http.Request){
 	httpx.WriteJSON(w, http.StatusOK, events)
 }
 
+func (h *Handler) UpcomingByItem(w http.ResponseWriter, r *http.Request){
+	itemID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || itemID <= 0 {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid item id")
+		return
+	}
 
+	now:=time.Now().UTC()
+	cur, upcoming, err := h.repo.ListUpcomingByItem(r.Context(), itemID, now, 20)
+	if err!= nil {
+		log.Println("upcomingByItem error:", err)
+		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	resp := upcomingByItemResponse{
+		ItemID: itemID,
+		IsInUse: cur!=nil,
+		Upcoming: upcoming,
+	}
+	if cur != nil{
+		resp.CurrentBooking = cur
+	}
+	httpx.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) AvailabilityByItem(w http.ResponseWriter, r *http.Request){
+	itemID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || itemID <=0{
+		httpx.WriteError(w, http.StatusBadRequest, "invalid item id")
+		return
+	}
+
+	fromS:= r.URL.Query().Get("from")
+	toS := r.URL.Query().Get("to")
+	if fromS == "" || toS == ""{
+		httpx.WriteError(w, http.StatusBadRequest, "from and to are required (YYYY-MM-DD)")
+		return
+	}
+
+	fromDay, err1 := time.Parse("2006-01-02", fromS)
+	toDay, err2 := time.Parse("2006-01-02", toS)
+	if err1 != nil || err2 != nil || !fromDay.Before(toDay) {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid from/to range")
+		return
+	}
+
+	if toDay.Sub(fromDay) > 180*24*time.Hour {
+		httpx.WriteError(w, http.StatusBadRequest, "range too large (max 180 days)")
+		return
+	}
+
+	busy, inUseNow, err:= h.repo.ListBusyDaysByItem(r.Context(), itemID, fromDay, toDay)
+	if err != nil {
+		log.Println("availability error:", err)
+		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	resp := availabilityResponse{
+		ItemID:     itemID,
+		From:       fromS,
+		To:         toS,
+		Timezone:   "UTC",
+		IsInUseNow: inUseNow,
+		Busy:       busy,
+	}
+	httpx.WriteJSON(w, http.StatusOK, resp)
+}
 
 
 

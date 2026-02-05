@@ -88,6 +88,14 @@ func (h *Handler) GetByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	imgs, err := h.repo.ListImages(r.Context(), it.ID)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	it.Images = imgs
+
+
 	httpx.WriteJSON(w, http.StatusOK, it)
 }
 
@@ -170,7 +178,108 @@ func (h *Handler) ListByOwnerPublic(w http.ResponseWriter, r *http.Request){
 
 
 
+func (h *Handler) ListImages(w http.ResponseWriter, r *http.Request){
+	itemID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err!=nil || itemID <=0{
+		httpx.WriteError(w, http.StatusBadRequest, "invalid item id")
+		return
+	}
+	imgs, err := h.repo.ListImages(r.Context(), itemID)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, imgs)
+}
 
+func (h *Handler) AddImage(w http.ResponseWriter, r *http.Request){
+	userID, ok := auth.UserIDFromContext(r.Context())
+	if !ok{
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	itemID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || itemID <= 0 {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid item id")
+		return
+	}
+
+	it, err := h.repo.GetByID(r.Context(), itemID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			httpx.WriteError(w, http.StatusNotFound, "item not found")
+			return
+		}
+		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if it.OwnerID != userID {
+		httpx.WriteError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
+	var dto struct {
+		URL string `json:"url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+
+	im, err := h.repo.AddImage(r.Context(), itemID, dto.URL)
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	httpx.WriteJSON(w, http.StatusCreated, im)
+}
+
+func (h *Handler) DeleteImage(w http.ResponseWriter, r *http.Request){
+	userID, ok := auth.UserIDFromContext(r.Context())
+	if !ok{
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	itemID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err!= nil|| itemID<=0{
+		httpx.WriteError(w, http.StatusBadRequest, "invalid item id")
+		return
+	}
+
+	imageID, err := strconv.ParseInt(r.PathValue("imageId"), 10, 64)
+	if err != nil || imageID <= 0 {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid image id")
+		return
+	}
+
+	it, err := h.repo.GetByID(r.Context(), itemID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			httpx.WriteError(w, http.StatusNotFound, "item not found")
+			return
+		}
+		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if it.OwnerID != userID {
+		httpx.WriteError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
+	if err := h.repo.DeleteImage(r.Context(), itemID, imageID); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			httpx.WriteError(w, http.StatusNotFound, "image not found")
+			return
+		}
+		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+
+}
 
 
 func parseLimitOffset(r *http.Request) (int, int, error){

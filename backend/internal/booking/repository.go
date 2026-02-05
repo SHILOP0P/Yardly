@@ -13,8 +13,10 @@ type Repo interface{
 	ListMyBookings(ctx context.Context, requesterID int64, statuses[]Status, limit, offset int)([]Booking, error)
 	ListMyItemsBookings(ctx context.Context, ownerID int64, statuses[]Status, limit, offset int)([]Booking, error)
 
+	ListUpcomingByItem(ctx context.Context, itemID int64, now time.Time, limit int) (inUse *Booking, upcoming []Booking, err error)
+	ListBusyDaysByItem(ctx context.Context, itemID int64, fromDay, toDay time.Time) ([]DayRange, bool, error)
+
 	ApproveRent(ctx context.Context, bookingID int64, ownerID int64)(Booking, error)
-	
 	ReturnRent(ctx context.Context, bookingID int64, actorID int64, now time.Time)(Booking, error)
 	HandoverRent(ctx context.Context, bookingID int64, actorID int64, now time.Time) (Booking, error)
 	

@@ -16,5 +16,10 @@ type Repo interface {
 
 	ListByOwnerPublic(ctx context.Context, ownerID int64, limit, offset int)([]Item, error)
 	ListMyItems(ctx context.Context, ownerId int64, limit, offset int)([]Item, error)
+
+	// Images
+	ListImages(ctx context.Context, itemID int64) ([]ItemImage, error)
+	AddImage(ctx context.Context, itemID int64, url string) (ItemImage, error)
+	DeleteImage(ctx context.Context, itemID int64, imageID int64) error
 }
  
