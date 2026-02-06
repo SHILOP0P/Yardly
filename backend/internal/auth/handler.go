@@ -31,10 +31,12 @@ type loginRequest struct {
 	Password string `json:"password"`
 }
 type loginResponse struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	TokenType    string `json:"token_type"`
+	AccessToken string `json:"access_token"`
+	TokenType   string `json:"token_type"`
 }
+
+
+
 
 type UserAuthenticator interface {
 	Authenticate(ctx context.Context, email, password string) (int64, error)
@@ -47,9 +49,8 @@ type refreshRequest struct{
 }
 
 type refreshResponse struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	TokenType    string `json:"token_type"`
+	AccessToken string `json:"access_token"`
+	TokenType   string `json:"token_type"`
 }
 
 
@@ -91,9 +92,11 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request){
 	}
 
 	log.Println("Generated token for user:", userID)
+	secure := r.TLS != nil
+	setRefreshCookie(w, refreshTok, expiresAt, secure)
+
 	httpx.WriteJSON(w, http.StatusOK, loginResponse{
 		AccessToken: tok,
-		RefreshToken: refreshTok,
 		TokenType:   "Bearer",
 	})
 }
@@ -103,9 +106,9 @@ const refreshGrace = 5 * time.Second
 
 
 func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request){
-	var req refreshRequest
-	if err:= json.NewDecoder(r.Body).Decode(&req); err != nil || req.RefreshToken ==""{
-		httpx.WriteError(w, http.StatusBadRequest, "invalid refresh_token")
+	oldRefresh, err := readRefreshCookie(r)
+	if err != nil {
+		httpx.WriteError(w, http.StatusUnauthorized, "missing refresh cookie")
 		return
 	}
 	
@@ -119,7 +122,7 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request){
 		return
 	}
 
-	userID, err := h.refresh.Rotate(r.Context(), req.RefreshToken, newRefresh, expiresAt, now, refreshGrace)
+	userID, err := h.refresh.Rotate(r.Context(), oldRefresh, newRefresh, expiresAt, now, refreshGrace)
 	if err != nil {
 		switch {
 		case stdErrors.Is(err, ErrInvalidRefresh):
@@ -141,23 +144,27 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request){
 		return
 	}
 
+	secure := r.TLS != nil
+	setRefreshCookie(w, newRefresh, expiresAt, secure)
+
 	httpx.WriteJSON(w, http.StatusOK, refreshResponse{
 		AccessToken:  accessTok,
-		RefreshToken: newRefresh,
 		TokenType:    "Bearer",
 	})
 }
 
 
 func (h *Handler) Logout(w http.ResponseWriter, r *http.Request){
-	var req refreshRequest
-	if err:=json.NewDecoder(r.Body).Decode(&req); err!=nil || req.RefreshToken == ""{
-		httpx.WriteError(w, http.StatusBadRequest, "invalid refresh_token")
+	refreshTok, err := readRefreshCookie(r)
+	if err != nil {
+		// даже если cookie нет — можно отвечать 204, чтобы фронту было проще
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
+
 	now := time.Now().UTC()
 
-	if err := h.refresh.Revoke(r.Context(), req.RefreshToken, now); err!= nil{
+	if err := h.refresh.Revoke(r.Context(), refreshTok, now); err!= nil{
 		httpx.WriteError(w, http.StatusInternalServerError, "could not revoke refresh token")
 		return
 	}
@@ -169,6 +176,7 @@ func (h *Handler) LogoutAll(w http.ResponseWriter, r *http.Request){
 	userID, ok := UserIDFromContext(r.Context())
 	if !ok{
 		httpx.WriteError(w, http.StatusUnauthorized, "unauthorized")
+		return
 	}
 
 	now := time.Now().UTC()
@@ -177,6 +185,9 @@ func (h *Handler) LogoutAll(w http.ResponseWriter, r *http.Request){
 		httpx.WriteError(w, http.StatusInternalServerError, "could not revoke sessions")
 		return
 	}
+
+	secure := r.TLS != nil
+	clearRefreshCookie(w, secure)
 	
 	w.WriteHeader(http.StatusNoContent)
 }

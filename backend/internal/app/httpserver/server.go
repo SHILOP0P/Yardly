@@ -16,6 +16,7 @@ import (
 	"github.com/SHILOP0P/Yardly/backend/internal/booking"
 	"github.com/SHILOP0P/Yardly/backend/internal/item"
 	"github.com/SHILOP0P/Yardly/backend/internal/favorite"
+	"github.com/SHILOP0P/Yardly/backend/internal/httpx"
 )
 
 func New(port string, pool *pgxpool.Pool,itemsRepo *itempg.Repo, bookingRepo *bookingpg.Repo, userRepo *userpg.Repo, refreshesRepo *auth.RefreshRepo, favoriteRepo favorite.Repo, jwtSvc *auth.JWT, refreshTTL time.Duration) *http.Server{
@@ -33,7 +34,7 @@ func New(port string, pool *pgxpool.Pool,itemsRepo *itempg.Repo, bookingRepo *bo
 
 	return &http.Server{
 		Addr: ":" + port,
-		Handler: mux,
+		Handler: httpx.CORS(mux),
 	}
 }
 

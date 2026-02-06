@@ -70,3 +70,16 @@ backend/db/data/
 *.swp
 *.swo
 *~
+
+
+####################################
+# Frontend (Next.js)
+####################################
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.env
+frontend/.env.local
+frontend/.env.*.local
+node_modules/
+.next/
