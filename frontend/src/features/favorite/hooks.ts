@@ -1,13 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSession } from "@/shared/auth/store";
 import { favoriteApi } from "@/shared/api/endpoints/favorite";
 
 export function useIsFavorite(itemId: number) {
+  const access = useSession((s) => s.accessToken);
+
   return useQuery({
-    queryKey: ["favorite", "is", itemId],
+    queryKey: ["favorite", itemId, "is"],
     queryFn: () => favoriteApi.isFavorite(itemId),
-    enabled: Number.isFinite(itemId) && itemId > 0,
+    enabled: !!access && itemId > 0, // ✅ ключевой фикс
+    retry: false,
   });
 }
+
 
 export function useToggleFavorite(itemId: number) {
   const qc = useQueryClient();

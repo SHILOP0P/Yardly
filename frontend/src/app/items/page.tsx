@@ -15,9 +15,13 @@ export default function ItemsPage() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         {data?.map((it) => (
-          <Link key={it.id} href={`/items/${it.id}`} className="border rounded-xl p-4 hover:bg-white/5">
+          <Link key={it.id} 
+          href={`/items/${it.id}`} 
+          className="border rounded-xl p-4 hover:bg-white/5">
             <div className="font-medium">{it.title}</div>
-            <div className="text-sm opacity-70">{it.mode} • {it.status}</div>
+            <div className="text-sm opacity-70">
+              {it.mode} • {it.status}
+              </div>
           </Link>
         ))}
       </div>

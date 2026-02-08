@@ -6,8 +6,15 @@ export const bookingApi = {
   create: (itemId: number, payload: { type: BookingType; start_at?: string; end_at?: string }) =>
     apiFetch<any>(`/api/items/${itemId}/bookings`, { method: "POST", body: JSON.stringify(payload) }),
 
-  listMy: () => apiFetch<any[]>(`/api/my/bookings`, { method: "GET" }),
-  listMyItems: () => apiFetch<any[]>(`/api/my/items/bookings`, { method: "GET" }),
+  listMy: async () => {
+  const res = await apiFetch<{ items: any[] }>(`/api/my/bookings`, { method: "GET" });
+  return res.items;
+  },
+
+  listMyItems: async () => {
+  const res = await apiFetch<{ items: any[] }>(`/api/my/items/bookings`, { method: "GET" });
+  return res.items;
+  },
 
   approve: (id: number) => apiFetch<void>(`/api/bookings/${id}/approve`, { method: "POST" }),
   handover: (id: number) => apiFetch<void>(`/api/bookings/${id}/handover`, { method: "POST" }),

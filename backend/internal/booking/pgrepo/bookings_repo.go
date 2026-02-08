@@ -350,28 +350,13 @@ func (r *Repo) ReturnRent(ctx context.Context, bookingID int64, actorID int64, n
 	FOR UPDATE
 	`
 	var b booking.Booking
-	err = tx.QueryRow(ctx, selectQ, bookingID).Scan(
-		&b.ID,
-		&b.ItemID,
-		&b.RequesterID,
-		&b.OwnerID,
-		&b.Type,
-		&b.Status,
-		&b.Start,
-		&b.End,
-		&b.HandoverDeadline,
-		&b.HandoverConfirmedByOwnerAt,
-		&b.HandoverConfirmedByRequesterAt,
-		&b.ReturnConfirmedByOwnerAt,
-		&b.ReturnConfirmedByRequesterAt,
-		&b.CreatedAt,
-	)
-	if err != nil {
+	if err := scanBooking(tx.QueryRow(ctx, selectQ, bookingID), &b); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return booking.Booking{}, booking.ErrNotFound
 		}
-		return booking.Booking{}, fmt.Errorf("bookings pgrepo: return select: %w", err)
+		return booking.Booking{}, fmt.Errorf("bookings pgrepo: return rent select: %w", err)
 	}
+
 	if b.Type != booking.TypeRent {
 		return booking.Booking{}, booking.ErrInvalidState
 	}
@@ -384,136 +369,101 @@ func (r *Repo) ReturnRent(ctx context.Context, bookingID int64, actorID int64, n
 	if b.Status != booking.StatusInUse && b.Status != booking.StatusReturnPending {
 		return booking.Booking{}, booking.ErrInvalidState
 	}
-	if actorID == b.OwnerID && b.ReturnConfirmedByOwnerAt == nil {
-		b.ReturnConfirmedByOwnerAt = &now
-	}
-	if actorID == b.RequesterID && b.ReturnConfirmedByRequesterAt == nil {
-		b.ReturnConfirmedByRequesterAt = &now
+
+	setOwner := actorID == b.OwnerID
+	setRequester := actorID == b.RequesterID
+
+	const updQ = `
+UPDATE bookings
+SET
+  return_confirmed_by_owner_at =
+    COALESCE(return_confirmed_by_owner_at,
+      CASE WHEN $2 THEN $4::timestamptz ELSE NULL END),
+  return_confirmed_by_requester_at =
+    COALESCE(return_confirmed_by_requester_at,
+      CASE WHEN $3 THEN $4::timestamptz ELSE NULL END),
+  status = CASE
+    WHEN
+      COALESCE(return_confirmed_by_owner_at,
+        CASE WHEN $2 THEN $4::timestamptz ELSE NULL END) IS NOT NULL
+      AND
+      COALESCE(return_confirmed_by_requester_at,
+        CASE WHEN $3 THEN $4::timestamptz ELSE NULL END) IS NOT NULL
+      THEN 'completed'
+    WHEN status = 'in_use' THEN 'return_pending'
+    ELSE status
+  END
+WHERE id = $1
+RETURNING ` + selectBookingCols + `
+`
+
+	var out booking.Booking
+	if err := scanBooking(tx.QueryRow(ctx, updQ, b.ID, setOwner, setRequester, now), &out); err != nil {
+		return booking.Booking{}, fmt.Errorf("bookings pgrepo: return rent update: %w", err)
 	}
 
-	const updMarks = `
-	UPDATE bookings
-	SET return_confirmed_by_owner_at = $1,
-		return_confirmed_by_requester_at = $2
-	WHERE id = $3
-	RETURNING
-		return_confirmed_by_owner_at,
-		return_confirmed_by_requester_at,
-		status
-	`
-	err = tx.QueryRow(ctx, updMarks,
-		b.ReturnConfirmedByOwnerAt,
-		b.ReturnConfirmedByRequesterAt,
-		b.ID,
-	).Scan(&b.ReturnConfirmedByOwnerAt, &b.ReturnConfirmedByRequesterAt, &b.Status)
-	if err != nil {
-		return booking.Booking{}, fmt.Errorf("bookings pgrepo: return update marks: %w", err)
-	}
-
-	actor := actorID
-
-	by := "requester"
-	if actorID == b.OwnerID {
+	didConfirm := false
+	by := ""
+	if setOwner {
 		by = "owner"
-	}
-	meta, _ := json.Marshal(map[string]string{"by": by})
-
-	if err := r.eventRepo.InsertBookingEvent(
-		ctx, tx,
-		b.ID,
-		&actor,
-		"return_confirm",
-		nil,
-		nil,
-		meta,
-	); err != nil {
-		return booking.Booking{}, err
+		didConfirm = (b.ReturnConfirmedByOwnerAt == nil && out.ReturnConfirmedByOwnerAt != nil)
+	} else {
+		by = "requester"
+		didConfirm = (b.ReturnConfirmedByRequesterAt == nil && out.ReturnConfirmedByRequesterAt != nil)
 	}
 
-	if b.ReturnConfirmedByOwnerAt != nil && b.ReturnConfirmedByRequesterAt != nil {
-		from := b.Status
+	if didConfirm {
+		actor := actorID
+		meta, _ := json.Marshal(map[string]string{"by": by})
 
-		const updStatus = `
-		UPDATE bookings
-		SET status = $1
-		WHERE id = $2 AND status IN ($3, $4)
-		RETURNING status
-		`
-		err = tx.QueryRow(ctx, updStatus,
-			booking.StatusCompleted,
-			b.ID,
-			booking.StatusInUse,
-			booking.StatusReturnPending,
-		).Scan(&b.Status)
-		if err != nil {
-			return booking.Booking{}, fmt.Errorf("bookings pgrepo: return set status: %w", err)
-		}
-
-		to := b.Status
-
-		if err := r.eventRepo.InsertBookingEvent(
-			ctx, tx,
-			b.ID,
-			&actor,
-			"status_change",
-			&from,
-			&to,
-			nil,
-		); err != nil {
+		if err := r.eventRepo.InsertBookingEvent(ctx, tx, out.ID, &actor, "return_confirm", nil, nil, meta); err != nil {
 			return booking.Booking{}, err
 		}
 
-		if err := syncItemStatusTx(ctx, tx, b.ItemID); err != nil {
-			return booking.Booking{}, err
+		if b.Status != out.Status {
+			from := b.Status
+			to := out.Status
+			if err := r.eventRepo.InsertBookingEvent(ctx, tx, out.ID, &actor, "status_change", &from, &to, nil); err != nil {
+				return booking.Booking{}, err
+			}
+		}
+
+		// после завершения аренды — синхронизируем item статус обратно
+		if out.Status == booking.StatusCompleted {
+			if err := syncItemStatusTx(ctx, tx, out.ItemID); err != nil {
+				return booking.Booking{}, err
+			}
 		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return booking.Booking{}, fmt.Errorf("bookings pgrepo: commit: %w", err)
 	}
-	return b, nil
+	return out, nil
 }
 
-func (r *Repo) HandoverRent(ctx context.Context, bookingID int64, actorID int64, now time.Time) (booking.Booking, error) {
 
+func (r *Repo) HandoverRent(ctx context.Context, bookingID int64, actorID int64, now time.Time) (booking.Booking, error) {
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return booking.Booking{}, fmt.Errorf("bookings pgrepo: begin tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
-	// Если дедлайн прошёл — НЕ переводим в in_use.
-	// Это защищает инвариант "только в течение 24 часов".
 	const selectQ = `
-	SELECT ` + selectBookingCols + `
-	FROM bookings
-	WHERE id = $1
-	FOR UPDATE
-	`
+		SELECT ` + selectBookingCols + `
+		FROM bookings
+		WHERE id = $1
+		FOR UPDATE
+		`
 	var b booking.Booking
-	err = tx.QueryRow(ctx, selectQ, bookingID).Scan(
-		&b.ID,
-		&b.ItemID,
-		&b.RequesterID,
-		&b.OwnerID,
-		&b.Type,
-		&b.Status,
-		&b.Start,
-		&b.End,
-		&b.HandoverDeadline,
-		&b.HandoverConfirmedByOwnerAt,
-		&b.HandoverConfirmedByRequesterAt,
-		&b.ReturnConfirmedByOwnerAt,
-		&b.ReturnConfirmedByRequesterAt,
-		&b.CreatedAt,
-	)
-
-	if err != nil {
+	if err := scanBooking(tx.QueryRow(ctx, selectQ, bookingID), &b); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return booking.Booking{}, r.explainNoRows(ctx, bookingID, actorID, booking.StatusApproved)
+			return booking.Booking{}, booking.ErrNotFound
 		}
-		return booking.Booking{}, fmt.Errorf("bookings pgrepo: handover: %w", err)
+		return booking.Booking{}, fmt.Errorf("bookings pgrepo: handover rent select: %w", err)
 	}
+
 	if b.Type != booking.TypeRent {
 		return booking.Booking{}, booking.ErrInvalidState
 	}
@@ -523,97 +473,88 @@ func (r *Repo) HandoverRent(ctx context.Context, bookingID int64, actorID int64,
 	if actorID == b.OwnerID && actorID == b.RequesterID {
 		return booking.Booking{}, booking.ErrInvalidState
 	}
-	if b.Status != booking.StatusApproved {
+	if b.Status != booking.StatusApproved && b.Status != booking.StatusHandoverPending {
 		return booking.Booking{}, booking.ErrInvalidState
 	}
 	if b.HandoverDeadline == nil || now.After(*b.HandoverDeadline) {
 		return booking.Booking{}, booking.ErrInvalidState
 	}
-	if actorID == b.OwnerID && b.HandoverConfirmedByOwnerAt == nil {
-		b.HandoverConfirmedByOwnerAt = &now
-	}
-	if actorID == b.RequesterID && b.HandoverConfirmedByRequesterAt == nil {
-		b.HandoverConfirmedByRequesterAt = &now
-	}
 
-	const updMarks = `
+	setOwner := actorID == b.OwnerID
+	setRequester := actorID == b.RequesterID
+
+	const updQ = `
 		UPDATE bookings
-		SET handover_confirmed_by_owner_at = $1,
-			handover_confirmed_by_requester_at = $2
-		WHERE id = $3
-		RETURNING
-			handover_confirmed_by_owner_at,
-			handover_confirmed_by_requester_at,
-			status
-		`
-	err = tx.QueryRow(ctx, updMarks,
-		b.HandoverConfirmedByOwnerAt,
-		b.HandoverConfirmedByRequesterAt,
-		b.ID,
-	).Scan(&b.HandoverConfirmedByOwnerAt, &b.HandoverConfirmedByRequesterAt, &b.Status)
-	if err != nil {
-		return booking.Booking{}, fmt.Errorf("bookings pgrepo: handover update marks: %w", err)
+		SET
+		handover_confirmed_by_owner_at =
+			COALESCE(handover_confirmed_by_owner_at,
+			CASE WHEN $2 THEN $4::timestamptz ELSE NULL END),
+		handover_confirmed_by_requester_at =
+			COALESCE(handover_confirmed_by_requester_at,
+			CASE WHEN $3 THEN $4::timestamptz ELSE NULL END),
+		status = CASE
+			WHEN
+			COALESCE(handover_confirmed_by_owner_at,
+				CASE WHEN $2 THEN $4::timestamptz ELSE NULL END) IS NOT NULL
+			AND
+			COALESCE(handover_confirmed_by_requester_at,
+				CASE WHEN $3 THEN $4::timestamptz ELSE NULL END) IS NOT NULL
+			THEN 'in_use'
+			WHEN status = 'approved' THEN 'handover_pending'
+			ELSE status
+		END
+		WHERE id = $1
+		RETURNING ` + selectBookingCols + `
+`
+
+	var out booking.Booking
+	if err := scanBooking(tx.QueryRow(ctx, updQ, b.ID, setOwner, setRequester, now), &out); err != nil {
+		return booking.Booking{}, fmt.Errorf("bookings pgrepo: handover rent update: %w", err)
 	}
 
-	actor := actorID
-	by := "requester"
-	if actorID == b.OwnerID {
+	// идемпотентность: если актор уже подтверждал раньше — не пишем event и не меняем ничего дополнительно
+	didConfirm := false
+	by := ""
+	if setOwner {
 		by = "owner"
-	}
-	meta, _ := json.Marshal(map[string]string{"by": by})
-
-	if err := r.eventRepo.InsertBookingEvent(ctx, tx,
-		b.ID,
-		&actor,
-		"handover_confirm",
-		nil,
-		nil,
-		meta,
-	); err != nil {
-		return booking.Booking{}, err
+		didConfirm = (b.HandoverConfirmedByOwnerAt == nil && out.HandoverConfirmedByOwnerAt != nil)
+	} else {
+		by = "requester"
+		didConfirm = (b.HandoverConfirmedByRequesterAt == nil && out.HandoverConfirmedByRequesterAt != nil)
 	}
 
-	if b.HandoverConfirmedByOwnerAt != nil && b.HandoverConfirmedByRequesterAt != nil {
-		from := b.Status
+	if didConfirm {
+		actor := actorID
+		meta, _ := json.Marshal(map[string]string{"by": by})
 
-		const updStatus = `
-			UPDATE bookings
-			SET status = $1
-			WHERE id = $2 AND status = $3
-			RETURNING status
-			`
-		err = tx.QueryRow(ctx, updStatus,
-			booking.StatusInUse,
-			b.ID,
-			booking.StatusApproved,
-		).Scan(&b.Status)
-		if err != nil {
-			return booking.Booking{}, fmt.Errorf("bookings pgrepo: handover set status: %w", err)
-		}
-
-		to := b.Status
-		if err := r.eventRepo.InsertBookingEvent(ctx, tx,
-			b.ID,
-			&actor,
-			"status_change",
-			&from,
-			&to,
-			nil,
-		); err != nil {
+		// событие подтверждения
+		if err := r.eventRepo.InsertBookingEvent(ctx, tx, out.ID, &actor, "handover_confirm", nil, nil, meta); err != nil {
 			return booking.Booking{}, err
 		}
 
-		if err := syncItemStatusTx(ctx, tx, b.ItemID); err != nil {
-			return booking.Booking{}, err
+		// если статус реально поменялся — фиксируем отдельно
+		if b.Status != out.Status {
+			from := b.Status
+			to := out.Status
+			if err := r.eventRepo.InsertBookingEvent(ctx, tx, out.ID, &actor, "status_change", &from, &to, nil); err != nil {
+				return booking.Booking{}, err
+			}
+		}
+
+		// синхронизируем item только если дошли до in_use
+		if out.Status == booking.StatusInUse {
+			if err := syncItemStatusTx(ctx, tx, out.ItemID); err != nil {
+				return booking.Booking{}, err
+			}
 		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return booking.Booking{}, fmt.Errorf("bookings pgrepo: commit: %w", err)
 	}
-
-	return b, nil
+	return out, nil
 }
+
 
 func (r *Repo) ExpireOverdueHandovers(ctx context.Context, now time.Time) (int64, error) {
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
@@ -939,15 +880,14 @@ func (r *Repo) HandoverTransfer(ctx context.Context, bookingID, actorID int64, n
 	if err != nil {
 		return booking.Booking{}, fmt.Errorf("bookings pgrepo: begin tx: %w", err)
 	}
-
 	defer tx.Rollback(ctx)
 
 	const selectQ = `
-	SELECT ` + selectBookingCols + `
-	FROM bookings
-	WHERE id = $1
-	FOR UPDATE
-	`
+SELECT ` + selectBookingCols + `
+FROM bookings
+WHERE id = $1
+FOR UPDATE
+`
 	var b booking.Booking
 	if err := scanBooking(tx.QueryRow(ctx, selectQ, bookingID), &b); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -959,80 +899,78 @@ func (r *Repo) HandoverTransfer(ctx context.Context, bookingID, actorID int64, n
 	if b.Type != booking.TypeBuy && b.Type != booking.TypeGive {
 		return booking.Booking{}, booking.ErrInvalidState
 	}
-	// подтверждать можно только после approved
 	if b.Status != booking.StatusApproved && b.Status != booking.StatusHandoverPending {
 		return booking.Booking{}, booking.ErrInvalidState
 	}
-	// участник должен быть owner или requester
 	if actorID != b.OwnerID && actorID != b.RequesterID {
 		return booking.Booking{}, booking.ErrForbidden
 	}
-
 	if actorID == b.OwnerID && actorID == b.RequesterID {
-		return booking.Booking{}, booking.ErrForbidden
+		return booking.Booking{}, booking.ErrInvalidState
 	}
 
-	// ставим отметку кто подтвердил handover
-	setOwner := (actorID == b.OwnerID)
-	setRequester := (actorID == b.RequesterID)
+	setOwner := actorID == b.OwnerID
+	setRequester := actorID == b.RequesterID
 
-	newStatus := b.Status
-	if newStatus == booking.StatusApproved {
-		newStatus = booking.StatusHandoverPending
-	}
-
+	// переносим approved -> handover_pending при первом подтверждении, а при двух подтверждениях -> completed
 	const updQ = `
-	UPDATE bookings
-	SET status = $2,
-		handover_confirmed_by_owner_at =
-		COALESCE(handover_confirmed_by_owner_at,
-				CASE WHEN $3 THEN $4::timestamptz ELSE NULL END),
-		handover_confirmed_by_requester_at =
-		COALESCE(handover_confirmed_by_requester_at,
-				CASE WHEN $5 THEN $4::timestamptz ELSE NULL END)
-	WHERE id = $1
-	RETURNING ` + selectBookingCols + `
-	`
+UPDATE bookings
+SET
+  handover_confirmed_by_owner_at =
+    COALESCE(handover_confirmed_by_owner_at,
+      CASE WHEN $2 THEN $4::timestamptz ELSE NULL END),
+  handover_confirmed_by_requester_at =
+    COALESCE(handover_confirmed_by_requester_at,
+      CASE WHEN $3 THEN $4::timestamptz ELSE NULL END),
+  status = CASE
+    WHEN
+      COALESCE(handover_confirmed_by_owner_at,
+        CASE WHEN $2 THEN $4::timestamptz ELSE NULL END) IS NOT NULL
+      AND
+      COALESCE(handover_confirmed_by_requester_at,
+        CASE WHEN $3 THEN $4::timestamptz ELSE NULL END) IS NOT NULL
+      THEN 'completed'
+    WHEN status = 'approved' THEN 'handover_pending'
+    ELSE status
+  END
+WHERE id = $1
+RETURNING ` + selectBookingCols + `
+`
 
 	var out booking.Booking
-	if err := scanBooking(tx.QueryRow(ctx, updQ,
-		b.ID,
-		newStatus,
-		setOwner,
-		now,
-		setRequester,
-	), &out); err != nil {
+	if err := scanBooking(tx.QueryRow(ctx, updQ, b.ID, setOwner, setRequester, now), &out); err != nil {
 		return booking.Booking{}, fmt.Errorf("bookings pgrepo: handover transfer update: %w", err)
 	}
 
-	actor := actorID
-
-	if out.HandoverConfirmedByOwnerAt != nil && out.HandoverConfirmedByRequesterAt != nil {
-		from := out.Status
-		to := booking.StatusCompleted
-
-		const finQ = `
-		UPDATE bookings
-		SET status = $2
-		WHERE id = $1
-		RETURNING ` + selectBookingCols + `
-		`
-		if err := scanBooking(tx.QueryRow(ctx, finQ, out.ID, booking.StatusCompleted), &out); err != nil {
-			return booking.Booking{}, fmt.Errorf("bookings pgrepo: complete transfer: %w", err)
-		}
-
-		if err := markItemTransferredTx(ctx, tx, out.ItemID); err != nil {
-			return booking.Booking{}, err
-		}
-
-		if err := r.eventRepo.InsertBookingEvent(ctx, tx, bookingID, &actor, "complete_transfer", &from, &to, nil); err != nil {
-			return booking.Booking{}, err
-		}
+	didConfirm := false
+	if setOwner {
+		didConfirm = (b.HandoverConfirmedByOwnerAt == nil && out.HandoverConfirmedByOwnerAt != nil)
 	} else {
+		didConfirm = (b.HandoverConfirmedByRequesterAt == nil && out.HandoverConfirmedByRequesterAt != nil)
+	}
+
+	if didConfirm {
+		actor := actorID
+
+		// событие подтверждения
 		from := b.Status
 		to := out.Status
 		if err := r.eventRepo.InsertBookingEvent(ctx, tx, out.ID, &actor, "handover_transfer_confirm", &from, &to, nil); err != nil {
 			return booking.Booking{}, err
+		}
+
+		// если завершили передачу — отметить item как transferred и записать отдельный event
+		if out.Status == booking.StatusCompleted {
+			if err := markItemTransferredTx(ctx, tx, out.ItemID); err != nil {
+				return booking.Booking{}, err
+			}
+
+			// можно отдельно логировать "complete_transfer"
+			f2 := booking.StatusHandoverPending
+			t2 := booking.StatusCompleted
+			if err := r.eventRepo.InsertBookingEvent(ctx, tx, out.ID, &actor, "complete_transfer", &f2, &t2, nil); err != nil {
+				return booking.Booking{}, err
+			}
 		}
 	}
 
@@ -1041,6 +979,7 @@ func (r *Repo) HandoverTransfer(ctx context.Context, bookingID, actorID int64, n
 	}
 	return out, nil
 }
+
 
 func (r *Repo) CancelTransfer(ctx context.Context, bookingID, requesterID int64) (booking.Booking, error) {
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})

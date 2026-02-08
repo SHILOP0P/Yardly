@@ -18,10 +18,9 @@ export default function MyFavoritesPage() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         {q.data?.map((it) => (
         <Link
-            key={it.id}                         // ✅ key обязательно и уникальный
-            href={`/items/${it.id}`}
-            className="border rounded-xl p-4 hover:bg-white/5"
-        >
+            key={it.item_id}                         // ✅ key обязательно и уникальный
+            href={`/items/${it.item_id}`}
+            className="border rounded-xl p-4 hover:bg-white/5">
             <div className="font-medium">{it.title}</div>
             <div className="text-sm opacity-70">
             {it.mode} • {it.status}

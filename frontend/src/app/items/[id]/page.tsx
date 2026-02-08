@@ -38,15 +38,14 @@ export default function ItemPage() {
             <Link className="border rounded-lg px-3 py-2" href={`/users/${it.owner_id}/items`}>
                 Вещи владельца
             </Link>
-
-            <Link href={`/items/${it.id}`}>Открыть</Link>
-            <Link href={`/items/${it.id}/upcoming`}>Upcoming</Link>
-            <Link href={`/my/items/bookings`}>Заявки</Link>
-
-
             <Link className="border rounded-lg px-3 py-2" href={`/items/${it.id}/upcoming`}>
                 Upcoming по вещи
             </Link>
+        </div>
+        <div className="flex flex-wrap gap-2 mt-3">
+            <Link href={`/items/${it.id}`}>Открыть</Link>
+            <Link href={`/items/${it.id}/upcoming`}>Upcoming</Link>
+            <Link href={`/my/items/bookings`}>Заявки</Link>
         </div>
 
         <div className="text-sm opacity-70">{it.mode} • {it.status}</div>

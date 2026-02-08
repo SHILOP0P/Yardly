@@ -18,6 +18,15 @@ export type Item = {
   images?: ItemImage[];
 };
 
+export type FavoriteItem = {
+  item_id: number;
+  title: string;
+  status: string;
+  mode: string;
+  owner_id: number;
+  favorited_at: string;
+};
+
 export type Tokens = {
   access_token: string;
   refresh_token: string;

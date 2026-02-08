@@ -35,5 +35,17 @@ export const itemsApi = {
     return apiFetch<any[]>(`/api/users/${ownerId}/items${qs ? `?${qs}` : ""}`, { method: "GET" }, { auth: false });
     },
 
+  myItems: (params?: { limit?: number; offset?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.limit != null) q.set("limit", String(params.limit));
+    if (params?.offset != null) q.set("offset", String(params.offset));
+    const qs = q.toString();
+    return apiFetch<any[]>(`/api/my/items${qs ? `?${qs}` : ""}`, { method: "GET" });
+  },
+
+  create: (dto: { title: string; mode: string }) =>
+  apiFetch(`/api/items`, { method: "POST", body: JSON.stringify(dto) }),
+
+
 };
 

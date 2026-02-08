@@ -469,7 +469,7 @@ func (h *Handler) ListMyItemsBookings(w http.ResponseWriter, r *http.Request){
 		return
 	}
 
-	out, err := h.repo.ListMyItemsBookings(r.Context(), ownerID,statuses,limit,offset)
+	out, err := h.repo.ListMyItemsBookings(r.Context(), ownerID, statuses, limit, offset)
 	if err!= nil{
 		log.Println("list my items bookings error:", err)
 		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
