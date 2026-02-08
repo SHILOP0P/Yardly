@@ -1304,3 +1304,55 @@ func markItemTransferredTx(ctx context.Context, tx pgx.Tx, itemID int64) error {
 	}
 	return nil
 }
+
+
+func (r *Repo) ListMyItemsBookingRequests(ctx context.Context, ownerID int64, types []booking.Type, limit, offset int) ([]booking.Booking, error){
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	tt := make([]string, 0, len(types))
+	for _, t := range types{
+		tt = append(tt, string(t))
+	}
+	
+	if len(tt)==0{
+		tt=[]string{string(booking.TypeRent), string(booking.TypeBuy), string(booking.TypeGive)}
+	}
+
+	const q = `
+	SELECT ` + selectBookingCols + `
+	FROM bookings
+	WHERE owner_id = $1
+		AND status = $2
+		AND type = ANY($3::text[])
+	ORDER BY created_at DESC, id DESC
+	LIMIT $4 OFFSET $5
+	`
+
+	rows, err := r.pool.Query(ctx, q, ownerID, string(booking.StatusRequested), tt, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("bookings pgrepo: list my items booking requests: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]booking.Booking, 0, limit)
+	for rows.Next() {
+		var b booking.Booking
+		if err := scanBooking(rows, &b); err != nil {
+			return nil, fmt.Errorf("bookings pgrepo: list my items booking requests scan: %w", err)
+		}
+		out = append(out, b)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("bookings pgrepo: list my items booking requests rows: %w", err)
+	}
+	return out, nil
+}

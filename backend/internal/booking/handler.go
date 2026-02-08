@@ -612,6 +612,42 @@ func (h *Handler) AvailabilityByItem(w http.ResponseWriter, r *http.Request){
 
 
 
+func (h *Handler) ListMyItemsBookingRequests(w http.ResponseWriter, r *http.Request){
+	ownerID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	types, err := parseTypes(r)
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid type")
+		return
+	}
+	if len(types) == 0 {
+		types = []Type{TypeRent, TypeBuy, TypeGive}
+	}
+
+	limit, offset, err := parseLimitOffset(r)
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid limit/offset")
+		return
+	}
+
+	out, err := h.repo.ListMyItemsBookingRequests(r.Context(), ownerID, types, limit, offset)
+	if err != nil {
+		log.Println("list my items booking requests error:", err)
+		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+		"items":  out,
+		"limit":  limit,
+		"offset": offset,
+	})
+}
+
 
 
 func writeBookingError(w http.ResponseWriter, op string, err error) {
@@ -682,6 +718,55 @@ func parseStatuses(r *http.Request)([]Status, error){
 	}
 	return out, nil
 }
+
+func parseTypes(r *http.Request) ([]Type, error) {
+	q := r.URL.Query()
+
+	raw := q["type"]
+	if len(raw) == 0 {
+		if s := q.Get("type"); s != "" {
+			raw = []string{s}
+		}
+	}
+	if len(raw) == 0 {
+		// also allow `types=`
+		raw = q["types"]
+		if len(raw) == 0 {
+			if s := q.Get("types"); s != "" {
+				raw = []string{s}
+			}
+		}
+	}
+	if len(raw) == 0 {
+		return nil, nil
+	}
+
+	out := make([]Type, 0, len(raw))
+	for _, part := range raw {
+		for _, token := range strings.Split(part, ",") {
+			s := strings.TrimSpace(token)
+			if s == "" {
+				continue
+			}
+			t := Type(s)
+			if !isValidType(t) {
+				return nil, ErrInvalidState
+			}
+			out = append(out, t)
+		}
+	}
+	return out, nil
+}
+
+func isValidType(t Type) bool {
+	switch t {
+	case TypeGive, TypeRent, TypeBuy:
+		return true
+	default:
+		return false
+	}
+}
+
 
 
 
