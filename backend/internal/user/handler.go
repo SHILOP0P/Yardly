@@ -142,7 +142,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request){
 		return
 	}
 
-	tok, err := h.jwt.Mint(u.ID)
+	tok, err := h.jwt.Mint(u.ID, "", true)
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not mint token")
 		return

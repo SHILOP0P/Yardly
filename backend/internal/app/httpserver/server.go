@@ -12,6 +12,8 @@ import (
 	"github.com/SHILOP0P/Yardly/backend/internal/user"
 	userpg "github.com/SHILOP0P/Yardly/backend/internal/user/pgrepo"
 
+	"github.com/SHILOP0P/Yardly/backend/internal/admin"
+
 	"github.com/SHILOP0P/Yardly/backend/internal/auth"
 	"github.com/SHILOP0P/Yardly/backend/internal/booking"
 	"github.com/SHILOP0P/Yardly/backend/internal/item"
@@ -19,18 +21,30 @@ import (
 	"github.com/SHILOP0P/Yardly/backend/internal/httpx"
 )
 
-func New(port string, pool *pgxpool.Pool,itemsRepo *itempg.Repo, bookingRepo *bookingpg.Repo, userRepo *userpg.Repo, refreshesRepo *auth.RefreshRepo, favoriteRepo favorite.Repo, jwtSvc *auth.JWT, refreshTTL time.Duration) *http.Server{
+
+
+func New(port string, pool *pgxpool.Pool,itemsRepo *itempg.Repo, bookingRepo *bookingpg.Repo, userRepo *userpg.Repo, refreshesRepo *auth.RefreshRepo, favoriteRepo favorite.Repo, adminRepo admin.Repo, jwtSvc *auth.JWT, refreshTTL time.Duration) *http.Server{
 	mux := http.NewServeMux()
 
 	RegisterBaseRotes(mux)
 
 	authMw := auth.Middleware(jwtSvc)
 
+
+	adminChain := func(h http.Handler) http.Handler {
+		return authMw(auth.RequireAdmin(h))
+	}
+
+	// superAdminChain := func(h http.Handler) http.Handler {
+	// 	return authMw(auth.RequireSuperAdmin(authUsers)(h))
+	// }
+
 	item.RegisterRoutes(mux, itemsRepo, authMw)
 	booking.RegisterRoutes(mux, bookingRepo, itemsRepo, authMw)
 	user.RegisterRoutes(mux, authMw, userRepo, jwtSvc)
 	auth.RegisterRoutes(mux, jwtSvc, refreshesRepo, refreshTTL, userRepo, authMw)
 	favorite.RegisterRoutes(mux, favoriteRepo, authMw)
+	admin.RegisterRoutes(mux, adminRepo, adminChain)
 
 	return &http.Server{
 		Addr: ":" + port,
@@ -48,3 +62,4 @@ func RegisterBaseRotes(mux *http.ServeMux){
 		fmt.Fprintln(w, "OK")
 	})
 }
+

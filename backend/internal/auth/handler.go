@@ -36,10 +36,15 @@ type loginResponse struct {
 }
 
 
-
+type AuthUser struct {
+	ID     int64
+	Role   Role
+	Banned bool
+}
 
 type UserAuthenticator interface {
-	Authenticate(ctx context.Context, email, password string) (int64, error)
+	Authenticate(ctx context.Context, email, password string) (AuthUser, error)
+	GetByIDForAuth(ctx context.Context, id int64) (AuthUser, error)
 }
 
 
@@ -65,13 +70,19 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request){
 		return
 	}
 
-	userID, err := h.users.Authenticate(r.Context(), req.Email, req.Password)
+	
+	au, err := h.users.Authenticate(r.Context(), req.Email, req.Password)
 	if err != nil {
-		// 401 чтобы не палить, существует ли email
 		httpx.WriteError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
-	tok, err := h.jwt.Mint(userID)
+	if au.Banned {
+		httpx.WriteError(w, http.StatusForbidden, "banned")
+		return
+	}
+
+
+	tok, err := h.jwt.Mint(au.ID, au.Role, au.Banned)
 	if err != nil {
 		log.Println("Error minting token:", err)
 		httpx.WriteError(w, http.StatusInternalServerError, "could not mint token")
@@ -85,13 +96,13 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request){
 	}
 
 	expiresAt := time.Now().UTC().Add(h.refreshTTL)
-	if err :=h.refresh.Create(r.Context(), userID, refreshTok, expiresAt); err!= nil{
+	if err :=h.refresh.Create(r.Context(), au.ID, refreshTok, expiresAt); err!= nil{
 		log.Println("Error saving refresh token:", err)
 		httpx.WriteError(w, http.StatusInternalServerError, "could not save refresh token")
 		return
 	}
 
-	log.Println("Generated token for user:", userID)
+	log.Println("Generated token for user:", au.ID)
 	secure := r.TLS != nil
 	setRefreshCookie(w, refreshTok, expiresAt, secure)
 
@@ -138,7 +149,18 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request){
 		return
 	}
 
-	accessTok, err := h.jwt.Mint(userID)
+	au, err := h.users.GetByIDForAuth(r.Context(), userID)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if au.Banned {
+		httpx.WriteError(w, http.StatusForbidden, "banned")
+		return
+	}
+
+
+	accessTok, err := h.jwt.Mint(au.ID, au.Role, au.Banned)
 	if err!=nil{
 		httpx.WriteError(w, http.StatusInternalServerError, "could not mint token")
 		return

@@ -7,15 +7,20 @@ type Role string
 const (
 	RoleUser  Role = "user"
 	RoleAdmin Role = "admin"
+	RoleSuperAdmin Role = "superadmin"
 )
 
 type User struct {
 	ID           int64     `json:"id"`
 	Email        string    `json:"email"`
 	PasswordHash string    `json:"-"`
+
 	Role         Role      `json:"role"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
+	BannedAt  *time.Time `json:"banned_at,omitempty"`
+	BanExpiresAt *time.Time `json:"ban_expires_at,omitempty"`
+	BanReason *string    `json:"ban_reason,omitempty"`
 }
 
 type Profile struct {

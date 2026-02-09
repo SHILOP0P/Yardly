@@ -25,13 +25,15 @@ func Middleware(jwtSvc *JWT) func(http.Handler) http.Handler{
 				return
 			}
 			tokenStr := strings.TrimSpace(strings.TrimPrefix(h,prefix))
-			userID, err := jwtSvc.Parse(tokenStr)
+			userID, role, banned, err := jwtSvc.Parse(tokenStr)
 			if err!=nil{
 				log.Println("Invalid token:", err)
 				httpx.WriteError(w, http.StatusUnauthorized, "invalid token")
 				return 
 			}
 			ctx:=WithUserID(r.Context(), userID)
+			ctx=WithRole(ctx, role)
+			ctx=WithBanned(ctx, banned)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
