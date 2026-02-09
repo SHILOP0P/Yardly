@@ -1,12 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { bookingApi } from "@/shared/api/endpoints/booking";
+import { bookingApi, type BookingListParams } from "@/shared/api/endpoints/booking";
 
-export function useMyBookings() {
-  return useQuery({ queryKey: ["booking", "my"], queryFn: bookingApi.listMy });
+export function useMyBookings(params: BookingListParams) {
+  return useQuery({
+    queryKey: ["booking", "my", params],
+    queryFn: () => bookingApi.listMy(params),
+  });
 }
 
-export function useMyItemsBookings() {
-  return useQuery({ queryKey: ["booking", "myItems"], queryFn: bookingApi.listMyItems });
+export function useMyItemsBookings(params: BookingListParams) {
+  return useQuery({
+    queryKey: ["booking", "myItems", params],
+    queryFn: () => bookingApi.listMyItems(params),
+  });
 }
 
 export function useBookingEvents(id: number) {

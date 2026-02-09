@@ -1,10 +1,37 @@
 "use client";
 
+import React from "react";
 import Link from "next/link";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useHydrateSession } from "@/shared/auth/useHydrateSession";
-import { useMyItemsBookings } from "@/features/booking/hooks"; // если у тебя так называется
-import { bookingApi } from "@/shared/api/endpoints/booking";
+
+// Если ты уже сделал хук — используй его:
+import { useMyItemsBookings } from "@/features/booking/hooks";
+
+// Если у тебя пока нет такого хука, можно временно заменить на bookingApi.listMyItems
+// import { useQuery } from "@tanstack/react-query";
+// import { bookingApi } from "@/shared/api/endpoints/booking";
+
+const ALL_STATUSES = [
+  "requested",
+  "approved",
+  "handover_pending",
+  "in_use",
+  "return_pending",
+  "completed",
+  "declined",
+  "cancelled",
+  "expired",
+] as const;
+
+const DEFAULT_ACTIVE_STATUSES = [
+  "requested",
+  "approved",
+  "handover_pending",
+  "in_use",
+  "return_pending",
+] as const;
+
+type Status = (typeof ALL_STATUSES)[number] | string;
 
 function Badge({ children }: { children: React.ReactNode }) {
   return (
@@ -28,179 +55,200 @@ function daysBetweenInclusive(startISO?: string, endISO?: string) {
   if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime())) return null;
   const ms = e.getTime() - s.getTime();
   if (ms < 0) return null;
-  // если бронь на сутки обычно end = start + N дней (как у тебя), то считаем дни как разницу по датам
-  const days = Math.ceil(ms / (24 * 60 * 60 * 1000));
-  return days;
+  return Math.ceil(ms / (24 * 60 * 60 * 1000));
+}
+
+function ruDays(n: number) {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return "день";
+  if (mod10 >= 2 && mod10 <= 4 && !(mod100 >= 12 && mod100 <= 14)) return "дня";
+  return "дней";
 }
 
 export default function MyItemsBookingsPage() {
   useHydrateSession();
 
-  const q = useMyItemsBookings();
-  const qc = useQueryClient();
+  const [statuses, setStatuses] = React.useState<Status[]>([...DEFAULT_ACTIVE_STATUSES]);
+  const [limit, setLimit] = React.useState<number>(20);
+  const [offset, setOffset] = React.useState<number>(0);
 
-  const invalidate = () => {
-    qc.invalidateQueries({ queryKey: ["my", "items", "bookings"] }); // если у тебя другой ключ — поправь
-    // иногда проще так:
-    qc.invalidateQueries();
+  // Вариант 1: через твой hook (рекомендую)
+  const q = useMyItemsBookings({ statuses, limit, offset });
+
+  // Вариант 2: если нет hook — раскомментируй и используй напрямую:
+  // const q = useQuery({
+  //   queryKey: ["booking", "myItems", { statuses, limit, offset }],
+  //   queryFn: () => bookingApi.listMyItems({ statuses, limit, offset } as any),
+  // });
+
+  const items = q.data?.items ?? [];
+  const hasPrev = offset > 0;
+  const hasNext = items.length === limit;
+
+  const toggleStatus = (s: Status) => {
+    setOffset(0);
+    setStatuses((prev) => (prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]));
   };
 
-  const approveMut = useMutation({
-    mutationFn: (id: number) => bookingApi.approve(id),
-    onSuccess: invalidate,
-  });
+  const setActivePreset = () => {
+    setOffset(0);
+    setStatuses([...DEFAULT_ACTIVE_STATUSES]);
+  };
 
-  const handoverMut = useMutation({
-    mutationFn: (id: number) => bookingApi.handover(id),
-    onSuccess: invalidate,
-  });
+  const setAllPreset = () => {
+    setOffset(0);
+    setStatuses([...ALL_STATUSES]);
+  };
 
-  const returnMut = useMutation({
-    mutationFn: (id: number) => bookingApi.return(id),
-    onSuccess: invalidate,
-  });
-
-  const cancelMut = useMutation({
-    mutationFn: (id: number) => bookingApi.cancel(id),
-    onSuccess: invalidate,
-  });
+  const clearPreset = () => {
+    setOffset(0);
+    setStatuses([]);
+  };
 
   if (q.isLoading) return <div className="p-6">Загрузка…</div>;
-  if (q.error) return <div className="p-6">Ошибка / 401 если не залогинен</div>;
+
+  if (q.error) {
+    const msg = (q.error as any)?.message;
+    return (
+      <div className="p-6 text-red-600">
+        Ошибка: {msg ? String(msg) : "ошибка загрузки"}
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 space-y-6">
       <h1 className="text-2xl font-semibold">Заявки на мои вещи</h1>
 
-      {q.data?.length === 0 && (
-        <div className="text-gray-500">Заявок пока нет</div>
-      )}
+      {/* Фильтры + пагинация */}
+      <div className="border rounded-2xl p-4 bg-white space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="text-sm font-medium text-gray-700 mr-2">Статусы:</div>
+
+          <button className="border rounded-lg px-3 py-1 text-sm hover:bg-gray-50" onClick={setActivePreset}>
+            Актуальные
+          </button>
+          <button className="border rounded-lg px-3 py-1 text-sm hover:bg-gray-50" onClick={setAllPreset}>
+            Все
+          </button>
+          <button className="border rounded-lg px-3 py-1 text-sm hover:bg-gray-50" onClick={clearPreset}>
+            Сбросить
+          </button>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          {ALL_STATUSES.map((s) => {
+            const on = statuses.includes(s);
+            return (
+              <button
+                key={s}
+                className={`border rounded-lg px-3 py-1 text-sm transition ${
+                  on ? "bg-gray-100" : "hover:bg-gray-50"
+                }`}
+                onClick={() => toggleStatus(s)}
+              >
+                {s}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="text-sm text-gray-600">
+            limit:
+            <select
+              className="ml-2 border rounded-lg px-2 py-1"
+              value={limit}
+              onChange={(e) => {
+                setOffset(0);
+                setLimit(Number(e.target.value));
+              }}
+            >
+              {[10, 20, 50, 100].map((v) => (
+                <option key={v} value={v}>
+                  {v}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="text-sm text-gray-600">
+            offset: <span className="font-medium">{offset}</span>
+          </div>
+
+          <div className="ml-auto flex gap-2">
+            <button
+              className="border rounded-lg px-4 py-2 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={!hasPrev || q.isFetching}
+              onClick={() => setOffset((o) => Math.max(0, o - limit))}
+            >
+              ← Назад
+            </button>
+            <button
+              className="border rounded-lg px-4 py-2 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={!hasNext || q.isFetching}
+              onClick={() => setOffset((o) => o + limit)}
+            >
+              Вперёд →
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {items.length === 0 && <div className="text-gray-500">Заявок по выбранным статусам нет</div>}
 
       <div className="space-y-4">
-        {q.data?.map((b: any) => {
-          const st = b.status as string;
-          const typ = b.type as string;
+        {items.map((b: any) => {
+          const st = String(b.status);
+          const typ = String(b.type);
 
-          // Owner-side логика видимости кнопок
-          const canApprove = st === "requested";
-
-          // Подтверждение передачи (handover) для owner:
-          // rent: approved или handover_pending
-          // buy/give: approved или handover_pending (у тебя общий эндпоинт handover, судя по UI)
-          const canHandover =
-            st === "approved" || st === "handover_pending";
-
-          // Подтверждение возврата (только rent)
-          const canReturn =
-            typ === "rent" && (st === "in_use" || st === "return_pending");
-
-          // Cancel на owner-side обычно НЕ должен быть (это спорно),
-          // но раз у тебя есть кнопка, показываем только когда ещё не завершено.
-          const canCancel =
-            st === "requested" || st === "approved" || st === "handover_pending";
-
-          const rentDays = daysBetweenInclusive(b.start, b.end);
-          const hasPeriod = Boolean(b.start && b.end);
+          // у тебя поля start/end
+          const start = b.start;
+          const end = b.end;
+          const d = daysBetweenInclusive(start, end);
 
           return (
             <div key={b.id} className="border rounded-2xl p-5 bg-white space-y-4">
-              {/* Header */}
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <div className="text-lg font-semibold">Заявка #{b.id}</div>
 
                   <div className="mt-1 flex flex-wrap gap-2">
                     <Badge>Вещь #{b.item_id}</Badge>
-                    <Badge>Запросил: #{b.requester_id}</Badge>
                     <Badge>{typ}</Badge>
                     <Badge>{st}</Badge>
+                    <Badge>Requester #{b.requester_id}</Badge>
                   </div>
                 </div>
 
-                <Link
-                  href={`/bookings/${b.id}/events`}
-                  className="text-sm text-blue-600 hover:underline"
-                >
+                <Link href={`/bookings/${b.id}/events`} className="text-sm text-blue-600 hover:underline">
                   События →
                 </Link>
               </div>
 
-              {/* Period */}
-              {hasPeriod && (
+              {start && end && (
                 <div className="text-sm text-gray-600">
-                  Период аренды:{" "}
+                  Период:{" "}
                   <span className="font-medium">
-                    {formatDT(b.start)} → {formatDT(b.end)}
+                    {formatDT(start)} → {formatDT(end)}
                   </span>
-                  {typeof rentDays === "number" && (
+                  {typeof d === "number" && (
                     <span className="ml-2 text-gray-500">
-                      ({rentDays} {rentDays === 1 ? "день" : rentDays < 5 ? "дня" : "дней"})
+                      ({d} {ruDays(d)})
                     </span>
                   )}
                 </div>
               )}
 
-              {/* Actions */}
+              {/* Owner-side действия можно добавить, когда скажешь какие у тебя эндпоинты:
+                  approve/decline/handover-confirm/return-confirm и т.д.
+              */}
               <div className="flex flex-wrap gap-2 pt-2 border-t">
-                <Link
-                  className="border rounded-lg px-4 py-2 cursor-pointer hover:bg-gray-50 transition"
-                  href={`/items/${b.item_id}`}
-                >
+                <Link className="border rounded-lg px-4 py-2 hover:bg-gray-50" href={`/items/${b.item_id}`}>
                   Открыть вещь
                 </Link>
-
-                {canApprove && (
-                  <button
-                    className="border rounded-lg px-4 py-2 cursor-pointer hover:bg-gray-50 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                    disabled={approveMut.isPending}
-                    onClick={() => approveMut.mutate(b.id)}
-                  >
-                    Одобрить
-                  </button>
-                )}
-
-                {canHandover && (
-                  <button
-                    className="border rounded-lg px-4 py-2 cursor-pointer hover:bg-gray-50 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                    disabled={handoverMut.isPending}
-                    onClick={() => handoverMut.mutate(b.id)}
-                  >
-                    Подтвердить передачу
-                  </button>
-                )}
-
-                {canReturn && (
-                  <button
-                    className="border rounded-lg px-4 py-2 cursor-pointer hover:bg-gray-50 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                    disabled={returnMut.isPending}
-                    onClick={() => returnMut.mutate(b.id)}
-                  >
-                    Подтвердить возврат
-                  </button>
-                )}
-
-                {canCancel && (
-                  <button
-                    className="border rounded-lg px-4 py-2 cursor-pointer text-red-600 hover:bg-red-50 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                    disabled={cancelMut.isPending}
-                    onClick={() => cancelMut.mutate(b.id)}
-                  >
-                    Отменить
-                  </button>
-                )}
               </div>
-
-              {/* Errors */}
-              {(approveMut.error || handoverMut.error || returnMut.error || cancelMut.error) ? (
-                <div className="text-sm text-red-600">
-                  {String(
-                    (approveMut.error as any)?.message ||
-                      (handoverMut.error as any)?.message ||
-                      (returnMut.error as any)?.message ||
-                      (cancelMut.error as any)?.message
-                  )}
-                </div>
-              ) : null}
             </div>
           );
         })}

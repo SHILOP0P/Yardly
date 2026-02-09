@@ -1,9 +1,32 @@
 "use client";
 
+import React from "react";
 import Link from "next/link";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { bookingApi } from "@/shared/api/endpoints/booking";
 import { useHydrateSession } from "@/shared/auth/useHydrateSession";
+import { useBookingActions, useMyBookings } from "@/features/booking/hooks";
+
+const ALL_STATUSES = [
+  "requested",
+  "approved",
+  "handover_pending",
+  "in_use",
+  "return_pending",
+  "completed",
+  "declined",
+  "cancelled",
+  "expired",
+] as const;
+
+const DEFAULT_ACTIVE_STATUSES = [
+  "requested",
+  "approved",
+  "handover_pending",
+  "in_use",
+  "return_pending",
+] as const;
+
+
+type Status = (typeof ALL_STATUSES)[number] | string;
 
 function Badge({ children }: { children: React.ReactNode }) {
   return (
@@ -30,58 +53,153 @@ function daysBetweenInclusive(startISO?: string, endISO?: string) {
   return Math.ceil(ms / (24 * 60 * 60 * 1000));
 }
 
+function ruDays(n: number) {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return "день";
+  if (mod10 >= 2 && mod10 <= 4 && !(mod100 >= 12 && mod100 <= 14)) return "дня";
+  return "дней";
+}
+
 export default function MyBookingsPage() {
   useHydrateSession();
 
-  const q = useQuery({
-    queryKey: ["my", "bookings"],
-    queryFn: bookingApi.listMy,
-  });
+  const [statuses, setStatuses] = React.useState<Status[]>([...DEFAULT_ACTIVE_STATUSES]);
+  const [limit, setLimit] = React.useState<number>(20);
+  const [offset, setOffset] = React.useState<number>(0);
 
-  const qc = useQueryClient();
-  const invalidate = () => qc.invalidateQueries({ queryKey: ["my", "bookings"] });
+  const q = useMyBookings({ statuses, limit, offset });
+  const actions = useBookingActions();
 
-  const handoverMut = useMutation({
-    mutationFn: (id: number) => bookingApi.handover(id),
-    onSuccess: invalidate,
-  });
+  const items = q.data?.items ?? [];
+  const hasPrev = offset > 0;
+  const hasNext = items.length === limit;
 
-  const returnMut = useMutation({
-    mutationFn: (id: number) => bookingApi.return(id),
-    onSuccess: invalidate,
-  });
+  const toggleStatus = (s: Status) => {
+    setOffset(0);
+    setStatuses((prev) => (prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]));
+  };
 
-  const cancelMut = useMutation({
-    mutationFn: (id: number) => bookingApi.cancel(id),
-    onSuccess: invalidate,
-  });
+  const setActivePreset = () => {
+    setOffset(0);
+    setStatuses([...DEFAULT_ACTIVE_STATUSES]);
+  };
+
+  const setAllPreset = () => {
+    setOffset(0);
+    setStatuses([...ALL_STATUSES]);
+  };
+
+  const clearPreset = () => {
+    setOffset(0);
+    setStatuses([]);
+  };
 
   if (q.isLoading) return <div className="p-6">Загрузка…</div>;
-  if (q.error) return <div className="p-6">Ошибка / 401</div>;
+
+  if (q.error) {
+    const msg = (q.error as any)?.message;
+    return (
+      <div className="p-6 text-red-600">
+        Ошибка: {msg ? String(msg) : "ошибка загрузки"}
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 space-y-6">
       <h1 className="text-2xl font-semibold">Мои заявки</h1>
 
-      {q.data?.length === 0 && (
-        <div className="text-gray-500">Заявок пока нет</div>
-      )}
+      {/* Фильтры + пагинация */}
+      <div className="border rounded-2xl p-4 bg-white space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="text-sm font-medium text-gray-700 mr-2">Статусы:</div>
+
+          <button className="border rounded-lg px-3 py-1 text-sm hover:bg-gray-50" onClick={setActivePreset}>
+            Актуальные
+          </button>
+          <button className="border rounded-lg px-3 py-1 text-sm hover:bg-gray-50" onClick={setAllPreset}>
+            Все
+          </button>
+          <button className="border rounded-lg px-3 py-1 text-sm hover:bg-gray-50" onClick={clearPreset}>
+            Сбросить
+          </button>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          {ALL_STATUSES.map((s) => {
+            const on = statuses.includes(s);
+            return (
+              <button
+                key={s}
+                className={`border rounded-lg px-3 py-1 text-sm transition ${on ? "bg-gray-100" : "hover:bg-gray-50"}`}
+                onClick={() => toggleStatus(s)}
+              >
+                {s}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="text-sm text-gray-600">
+            limit:
+            <select
+              className="ml-2 border rounded-lg px-2 py-1"
+              value={limit}
+              onChange={(e) => {
+                setOffset(0);
+                setLimit(Number(e.target.value));
+              }}
+            >
+              {[10, 20, 50, 100].map((v) => (
+                <option key={v} value={v}>
+                  {v}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="text-sm text-gray-600">
+            offset: <span className="font-medium">{offset}</span>
+          </div>
+
+          <div className="ml-auto flex gap-2">
+            <button
+              className="border rounded-lg px-4 py-2 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={!hasPrev || q.isFetching}
+              onClick={() => setOffset((o) => Math.max(0, o - limit))}
+            >
+              ← Назад
+            </button>
+            <button
+              className="border rounded-lg px-4 py-2 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={!hasNext || q.isFetching}
+              onClick={() => setOffset((o) => o + limit)}
+            >
+              Вперёд →
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {items.length === 0 && <div className="text-gray-500">Заявок по выбранным статусам нет</div>}
 
       <div className="space-y-4">
-        {q.data?.map((b: any) => {
-          const st = b.status as string;
-          const typ = b.type as string;
+        {items.map((b: any) => {
+          const st = String(b.status);
+          const typ = String(b.type);
 
-          // requester-side
           const canHandover = st === "approved" || st === "handover_pending";
-          const canReturn = st === "in_use" || st === "return_pending";
-          const canCancel = st === "requested" || st === "approved" || st === "handover_pending";
+          const canReturn   = st === "in_use" || st === "return_pending";
+          const canCancel   = st === "requested" || st === "approved" || st === "handover_pending";
 
-          const start = b.start ?? b.start_at;
-          const end = b.end ?? b.end_at;
 
-          const rentDays = daysBetweenInclusive(start, end);
-          const hasPeriod = Boolean(start && end);
+          const start = b.start; 
+          const end = b.end;
+
+
+          const d = daysBetweenInclusive(start, end);
 
           return (
             <div key={b.id} className="border rounded-2xl p-5 bg-white space-y-4">
@@ -95,41 +213,35 @@ export default function MyBookingsPage() {
                   </div>
                 </div>
 
-                <Link
-                  href={`/bookings/${b.id}/events`}
-                  className="text-sm text-blue-600 hover:underline"
-                >
+                <Link href={`/bookings/${b.id}/events`} className="text-sm text-blue-600 hover:underline">
                   События →
                 </Link>
               </div>
 
-              {hasPeriod && (
+              {start && end && (
                 <div className="text-sm text-gray-600">
                   Период:{" "}
                   <span className="font-medium">
                     {formatDT(start)} → {formatDT(end)}
                   </span>
-                  {typeof rentDays === "number" && (
+                  {typeof d === "number" && (
                     <span className="ml-2 text-gray-500">
-                      ({rentDays} {rentDays === 1 ? "день" : rentDays < 5 ? "дня" : "дней"})
+                      ({d} {ruDays(d)})
                     </span>
                   )}
                 </div>
               )}
 
               <div className="flex flex-wrap gap-2 pt-2 border-t">
-                <Link
-                  className="border rounded-lg px-4 py-2 cursor-pointer hover:bg-gray-50 transition"
-                  href={`/items/${b.item_id}`}
-                >
+                <Link className="border rounded-lg px-4 py-2 hover:bg-gray-50" href={`/items/${b.item_id}`}>
                   Открыть вещь
                 </Link>
 
                 {canHandover && (
                   <button
-                    className="border rounded-lg px-4 py-2 cursor-pointer hover:bg-gray-50 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                    disabled={handoverMut.isPending}
-                    onClick={() => handoverMut.mutate(b.id)}
+                    className="border rounded-lg px-4 py-2 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={actions.handover.isPending}
+                    onClick={() => actions.handover.mutate(b.id)}
                   >
                     Подтвердить передачу
                   </button>
@@ -137,9 +249,9 @@ export default function MyBookingsPage() {
 
                 {canReturn && (
                   <button
-                    className="border rounded-lg px-4 py-2 cursor-pointer hover:bg-gray-50 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                    disabled={returnMut.isPending}
-                    onClick={() => returnMut.mutate(b.id)}
+                    className="border rounded-lg px-4 py-2 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={actions.returnB.isPending}
+                    onClick={() => actions.returnB.mutate(b.id)}
                   >
                     Подтвердить возврат
                   </button>
@@ -147,21 +259,21 @@ export default function MyBookingsPage() {
 
                 {canCancel && (
                   <button
-                    className="border rounded-lg px-4 py-2 cursor-pointer text-red-600 hover:bg-red-50 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                    disabled={cancelMut.isPending}
-                    onClick={() => cancelMut.mutate(b.id)}
+                    className="border rounded-lg px-4 py-2 text-red-600 hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={actions.cancel.isPending}
+                    onClick={() => actions.cancel.mutate(b.id)}
                   >
                     Отменить
                   </button>
                 )}
               </div>
 
-              {(handoverMut.error || returnMut.error || cancelMut.error) ? (
+              {(actions.handover.error || actions.returnB.error || actions.cancel.error) ? (
                 <div className="text-sm text-red-600">
                   {String(
-                    (handoverMut.error as any)?.message ||
-                      (returnMut.error as any)?.message ||
-                      (cancelMut.error as any)?.message
+                    (actions.handover.error as any)?.message ||
+                      (actions.returnB.error as any)?.message ||
+                      (actions.cancel.error as any)?.message
                   )}
                 </div>
               ) : null}
