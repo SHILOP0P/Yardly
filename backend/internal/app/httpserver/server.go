@@ -30,17 +30,21 @@ func New(port string, pool *pgxpool.Pool,itemsRepo *itempg.Repo, bookingRepo *bo
 
 	authMw := auth.Middleware(jwtSvc)
 
+	protectedChain := func (h http.Handler) http.Handler{
+		return authMw(auth.RequireNotBanned(h))
+	}
+
 
 	adminChain := func(h http.Handler) http.Handler {
-		return authMw(auth.RequireAdmin(h))
+		return authMw(auth.RequireNotBanned(auth.RequireAdmin(h)))
 	}
 
 	// superAdminChain := func(h http.Handler) http.Handler {
 	// 	return authMw(auth.RequireSuperAdmin(authUsers)(h))
 	// }
 
-	item.RegisterRoutes(mux, itemsRepo, authMw)
-	booking.RegisterRoutes(mux, bookingRepo, itemsRepo, authMw)
+	item.RegisterRoutes(mux, itemsRepo, protectedChain)
+	booking.RegisterRoutes(mux, bookingRepo, itemsRepo, protectedChain)
 	user.RegisterRoutes(mux, authMw, userRepo, jwtSvc)
 	auth.RegisterRoutes(mux, jwtSvc, refreshesRepo, refreshTTL, userRepo, authMw)
 	favorite.RegisterRoutes(mux, favoriteRepo, authMw)

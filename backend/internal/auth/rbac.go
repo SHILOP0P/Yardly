@@ -15,6 +15,20 @@ func RequireSuperAdmin(next http.Handler) http.Handler {
 	return requireRole(next, RoleSuperAdmin)
 }
 
+func RequireNotBanned(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request){
+		if _, ok := UserIDFromContext(r.Context()); !ok{
+			httpx.WriteError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		if BannedFromContext(r.Context()) {
+			httpx.WriteError(w, http.StatusForbidden, "banned")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func requireRole(next http.Handler, min Role) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// userID должен быть уже в контексте после Middleware(jwtSvc)
