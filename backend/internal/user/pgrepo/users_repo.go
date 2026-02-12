@@ -65,7 +65,7 @@ func (r *Repo) CreateWithProfile(ctx context.Context, u *user.User, p *user.Prof
 
 func (r *Repo) GetByEmail(ctx context.Context, email string) (user.User, error){
 	const q = `
-	SELECT id, email, password_hash, role, u.banned_at, u.ban_expires_at, ban_reason, created_at, updated_at
+	SELECT id, email, password_hash, role, banned_at, ban_expires_at, ban_reason, created_at, updated_at
 	FROM users
 	WHERE email = $1
 	`

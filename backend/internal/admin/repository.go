@@ -16,13 +16,18 @@ type Repo interface {
 	GetBooking(ctx context.Context, id int64) (AdminBooking, error)
 	ListBookingEvents(ctx context.Context, bookingID int64, limit, offset int) ([]booking.Event, error)
 
+	//Items
+	ListItems(ctx context.Context, f AdminItemsFilter) ([]AdminItem, error)
+	GetItem(ctx context.Context, id int64) (AdminItem, error)
 
+	PatchItem(ctx context.Context, actorAdminID, itemID int64, req PatchItemRequest) (AdminItem, error)
 
+	BlockItem(ctx context.Context, actorAdminID, itemID int64, reason *string) (AdminItem, error)
+	UnblockItem(ctx context.Context, actorAdminID, itemID int64, reason *string) (AdminItem, error)
 
+	DeleteItem(ctx context.Context, actorAdminID, itemID int64, reason *string) (AdminItem, error)
 
-
-	ListAdminEventsByEntity(ctx context.Context, entityType string, entityID int64, limit, offset int,) ([]AdminEvent, error)
-
+	
 
 	//events
 	ListAdminEvents(ctx context.Context, f AdminEventsFilter) ([]AdminEvent, error)

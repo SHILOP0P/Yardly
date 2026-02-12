@@ -252,3 +252,161 @@ func (h *Handler) ListBookingEvents(w http.ResponseWriter, r *http.Request){
 		"offset": offset,
 	})
 }
+
+func (h *Handler) ListItems(w http.ResponseWriter, r *http.Request){
+	qp := r.URL.Query()
+
+	limit := httpx.QueryInt(r, "limit", 20, 1, 100)
+	offset := httpx.QueryInt(r, "offset", 0, 0, 1_000_000)
+
+	var f AdminItemsFilter
+	f.Limit=limit
+	f.Offset=offset
+
+	if s:=qp.Get("q"); s!=""{
+		f.Q = &s
+	}
+
+
+	if s := qp.Get("status"); s != "" {
+		f.Status = &s
+	}
+	if s := qp.Get("mode"); s != "" {
+		f.Mode = &s
+	}
+	f.IncludeDeleted = parseBool(qp.Get("include_deleted"))
+	f.IncludeArchived = parseBool(qp.Get("include_archived"))
+	f.IncludeTransferred = parseBool(qp.Get("include_transferred"))
+
+	items, err := h.repo.ListItems(r.Context(), f)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+		"items":  items,
+		"limit":  limit,
+		"offset": offset,
+	})
+}
+
+func (h *Handler) PatchItem(w http.ResponseWriter, r *http.Request){
+	actorID, ok := auth.UserIDFromContext(r.Context())
+	if !ok{
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	itemID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err!=nil||itemID<=0{
+		httpx.WriteError(w, http.StatusBadRequest, "invalid item id")
+		return
+	}
+
+	var req PatchItemRequest
+	if err:=httpx.ReadJSON(r, &req); err !=nil{
+		httpx.WriteError(w, http.StatusBadRequest, "invalid item id")
+		return
+	}
+	if req.Title == nil && req.Mode == nil && req.Status == nil {
+		httpx.WriteError(w, http.StatusBadRequest, "empty patch")
+		return
+	}
+
+	it, err := h.repo.PatchItem(r.Context(), actorID, itemID, req)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	httpx.WriteJSON(w, http.StatusOK, it)
+}
+
+func (h *Handler) BlockItem(w http.ResponseWriter, r *http.Request) {
+	actorID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	itemID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || itemID <= 0 {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid item id")
+		return
+	}
+
+	var body ModerationRequest
+	_ = httpx.ReadJSON(r, &body) // reason опционален, поэтому ошибку можно игнорить
+
+	it, err := h.repo.BlockItem(r.Context(), actorID, itemID, body.Reason)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	httpx.WriteJSON(w, http.StatusOK, it)
+}
+
+func (h *Handler) UnblockItem(w http.ResponseWriter, r *http.Request) {
+	actorID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	itemID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || itemID <= 0 {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid item id")
+		return
+	}
+
+	var body ModerationRequest
+	_ = httpx.ReadJSON(r, &body)
+
+	it, err := h.repo.UnblockItem(r.Context(), actorID, itemID, body.Reason)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	httpx.WriteJSON(w, http.StatusOK, it)
+}
+
+func (h *Handler) DeleteItem(w http.ResponseWriter, r *http.Request) {
+	actorID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	itemID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || itemID <= 0 {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid item id")
+		return
+	}
+
+	var body ModerationRequest
+	_ = httpx.ReadJSON(r, &body)
+
+	it, err := h.repo.DeleteItem(r.Context(), actorID, itemID, body.Reason)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	httpx.WriteJSON(w, http.StatusOK, it)
+}
+
+
+
+
+//	HELPERS
+func parseBool(s string) bool {
+	switch s {
+	case "1", "true", "True", "TRUE", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}

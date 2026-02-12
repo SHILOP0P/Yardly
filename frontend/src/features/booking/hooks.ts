@@ -31,6 +31,21 @@ export function useUpcomingByItem(itemId: number) {
   });
 }
 
+export function useBusyByItem(itemId: number) {
+  return useQuery({
+    queryKey: ["item", itemId, "busyBookings"],
+    queryFn: () => bookingApi.listBusyForItem(itemId),
+    enabled: Number.isFinite(itemId) && itemId > 0,
+  });
+}
+
+export function useMyItemsBookingRequests(params: { types?: Array<"rent" | "buy" | "give">; limit?: number; offset?: number }) {
+  return useQuery({
+    queryKey: ["booking", "myItemsRequests", params],
+    queryFn: () => bookingApi.listMyItemsBookingRequests(params),
+  });
+}
+
 export function useBookingActions() {
   const qc = useQueryClient();
 

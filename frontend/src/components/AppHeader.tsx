@@ -2,7 +2,9 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useHydrateSession } from "@/shared/auth/useHydrateSession";
 import { useSession } from "@/shared/auth/store";
+import { useMe } from "@/shared/auth/useMe";
 
 function NavLink({ href, label }: { href: string; label: string }) {
   const p = usePathname();
@@ -20,11 +22,16 @@ function NavLink({ href, label }: { href: string; label: string }) {
 }
 
 export function AppHeader() {
+  useHydrateSession();
+
   const access = useSession((s) => s.accessToken);
+  const meQ = useMe();
+  const role = meQ.data?.role;
+  const isAdmin = role === "admin" || role === "superadmin";
 
   return (
     <header className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur">
-      <div className="mx-auto max-w-5xl px-4 py-3 flex items-center justify-between gap-3">
+      <div className="mx-auto max-w-6xl px-4 py-3 flex items-center justify-between gap-3">
         <Link href="/" className="font-semibold">
           Yardly
         </Link>
@@ -37,12 +44,15 @@ export function AppHeader() {
           <NavLink href="/my/items/bookings" label="Заявки на мои вещи" />
           <NavLink href="/settings/security" label="Безопасность" />
           <NavLink href="/me" label="Профиль" />
+          {isAdmin && <NavLink href="/admin" label="Админка" />}
         </nav>
 
-        <div className="text-xs opacity-70">
-          {access ? "auth: ON" : "auth: OFF"}
+        <div className="text-xs opacity-70 text-right">
+          <div>{access ? "auth: ON" : "auth: OFF"}</div>
+          {access && role && <div>role: {role}</div>}
         </div>
       </div>
     </header>
   );
 }
+

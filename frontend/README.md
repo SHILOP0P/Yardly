@@ -1,36 +1,66 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+﻿# Yardly Frontend
 
-## Getting Started
+Фронтенд намеренно сделан простым: это UI-слой для работы с логикой бэкенда и проверки полноценных сценариев.
 
-First, run the development server:
+## Стек
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+- Next.js 16 (App Router)
+- React 19 + TypeScript
+- React Query для серверного состояния
+- Zustand для auth/session состояния
+
+## Назначение
+
+- Показывать и проверять backend-сценарии в реальном интерфейсе.
+- Покрывать пользовательские потоки: auth, вещи, бронирования, избранное.
+- Содержать админ-страницы для модерации/тестирования.
+- Оставаться прагматичным без лишней сложности.
+
+## Локальный запуск
+
+Из корня репозитория:
+
+```powershell
+.\commands.ps1 frontend
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Или напрямую:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```powershell
+cd frontend
+npm install
+npm run dev
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Фронтенд по умолчанию: `http://localhost:3000`
 
-## Learn More
+## Переменные окружения
 
-To learn more about Next.js, take a look at the following resources:
+Настройки в `frontend/.env.local`:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- `NEXT_PUBLIC_API_BASE_URL=http://localhost:8080`
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Для запросов API бэкенд должен быть запущен по этому адресу.
 
-## Deploy on Vercel
+## Основные разделы приложения
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+- `src/app/auth/*` - логин и регистрация.
+- `src/app/items/*` - каталог, страница вещи и связанные представления.
+- `src/app/my/*` - страницы текущего пользователя (вещи, бронирования, избранное).
+- `src/app/admin/*` - админ-разделы пользователей/вещей/бронирований/событий.
+- `src/shared/api/*` - API-клиент и обертки эндпоинтов.
+- `src/shared/auth/*` - auth-store и логика гидрации сессии.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Сборка и проверки
+
+```powershell
+cd frontend
+npm run lint
+npm run build
+npm run start
+```
+
+## Примечания
+
+- UI строится в первую очередь вокруг доменной логики бэкенда.
+- Если меняется backend API, сначала обновляйте обертки в `src/shared/api/endpoints`.

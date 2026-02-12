@@ -85,3 +85,36 @@ type AdminBookingEvent struct {
 	CreatedAt   time.Time  `json:"created_at"`
 }
 
+type AdminItem struct {
+	ID      int64  `json:"id"`
+	OwnerID int64  `json:"owner_id"`
+	Title   string `json:"title"`
+	Status  string `json:"status"`
+	Mode    string `json:"mode"`
+
+	BlockedAt   *time.Time `json:"blocked_at,omitempty"`
+	BlockReason *string    `json:"block_reason,omitempty"`
+}
+
+type AdminItemsFilter struct {
+	Q      *string // поиск по title
+	Status *string // точный статус
+	Mode   *string // точный mode
+
+	IncludeDeleted     bool
+	IncludeTransferred bool
+	IncludeArchived    bool
+
+	Limit  int
+	Offset int
+}
+
+type PatchItemRequest struct {
+	Title  *string `json:"title,omitempty"`
+	Mode   *string `json:"mode,omitempty"`
+	Status *string `json:"status,omitempty"` // разрешим, но валидируем
+}
+
+type ModerationRequest struct {
+	Reason *string `json:"reason,omitempty"`
+}

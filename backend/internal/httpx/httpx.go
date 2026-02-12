@@ -4,10 +4,39 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"fmt"
 )
 
 type ErrorResponse struct{
 	Error string `json: "error"`
+}
+
+// ReadJSON читает JSON из body в dst.
+// Делает базовую валидацию: корректный JSON, без лишних данных после объекта.
+func ReadJSON(r *http.Request, dst any) error {
+	if r.Body == nil {
+		return fmt.Errorf("empty body")
+	}
+	defer r.Body.Close()
+
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+
+	if err := dec.Decode(dst); err != nil {
+		return err
+	}
+
+	// Проверяем, что в body больше ничего нет (защита от "}{")
+	if dec.More() {
+		return fmt.Errorf("invalid json")
+	}
+	// Иногда dec.More() не ловит хвост. Надёжнее так:
+	var extra any
+	if err := dec.Decode(&extra); err == nil {
+		return fmt.Errorf("invalid json")
+	}
+
+	return nil
 }
 
 func WriteJSON(w http.ResponseWriter, status int, v any) {

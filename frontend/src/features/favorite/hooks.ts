@@ -20,7 +20,7 @@ export function useToggleFavorite(itemId: number) {
   const add = useMutation({
     mutationFn: () => favoriteApi.add(itemId),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["favorite", "is", itemId] });
+      qc.invalidateQueries({ queryKey: ["favorite", itemId, "is"] });
       qc.invalidateQueries({ queryKey: ["favorite", "my"] });
     },
   });
@@ -28,7 +28,7 @@ export function useToggleFavorite(itemId: number) {
   const remove = useMutation({
     mutationFn: () => favoriteApi.remove(itemId),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["favorite", "is", itemId] });
+      qc.invalidateQueries({ queryKey: ["favorite", itemId, "is"] });
       qc.invalidateQueries({ queryKey: ["favorite", "my"] });
     },
   });

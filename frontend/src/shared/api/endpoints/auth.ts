@@ -1,13 +1,13 @@
 import { apiFetch } from "@/shared/api/client";
-import type { Tokens } from "@/shared/api/types";
+import type { Me, RegisterResponse, Tokens } from "@/shared/api/types";
 
 export const authApi = {
-  register: (email: string, password: string) =>
-    apiFetch<Tokens>(
+  register: (payload: { email: string; password: string; first_name: string; last_name?: string }) =>
+    apiFetch<RegisterResponse>(
       "/api/auth/register",
       {
         method: "POST",
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify(payload),
       },
       { auth: false }
     ),
@@ -22,5 +22,5 @@ export const authApi = {
       { auth: false }
     ),
 
-  me: () => apiFetch<any>("/api/users/me"),
+  me: () => apiFetch<Me>("/api/users/me"),
 };

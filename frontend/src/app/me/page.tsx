@@ -1,22 +1,18 @@
 "use client";
 
 import Link from "next/link";
-import { useQuery } from "@tanstack/react-query";
-import { authApi } from "@/shared/api/endpoints/auth";
 import { useHydrateSession } from "@/shared/auth/useHydrateSession";
+import { useMe } from "@/shared/auth/useMe";
 
 export default function MePage() {
   useHydrateSession();
-
-  const meQ = useQuery({
-    queryKey: ["me"],
-    queryFn: () => authApi.me(),
-  });
+  const meQ = useMe();
 
   if (meQ.isLoading) return <div className="p-6">Загрузка...</div>;
   if (meQ.error) return <div className="p-6">Ошибка / 401 если не залогинен</div>;
 
   const me = meQ.data;
+  const isAdmin = me?.role === "admin" || me?.role === "superadmin";
 
   return (
     <div className="p-6 space-y-4">
@@ -25,7 +21,7 @@ export default function MePage() {
       <div className="border rounded-xl p-4">
         <div className="text-sm opacity-70">Вы вошли как:</div>
         <div className="font-medium">
-          id: {me?.id ?? "—"} • {me?.email ?? "—"}
+          id: {me?.id ?? "—"} • {me?.email ?? "—"} • role: {me?.role ?? "—"}
         </div>
       </div>
 
@@ -51,9 +47,16 @@ export default function MePage() {
         </Link>
       </div>
 
+      {isAdmin && (
+        <Link className="inline-flex border rounded-lg px-3 py-2" href="/admin">
+          Перейти в админку
+        </Link>
+      )}
+
       <Link className="inline-flex border rounded-lg px-3 py-2" href="/settings/security">
         Безопасность (logout / logout_all)
       </Link>
     </div>
   );
 }
+
