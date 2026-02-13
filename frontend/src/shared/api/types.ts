@@ -15,6 +15,11 @@ export type Item = {
   title: string;
   status: ItemStatus;
   mode: DealMode;
+  description: string;
+  price: number;
+  deposit: number;
+  location: string;
+  category: string;
   images?: ItemImage[];
 };
 

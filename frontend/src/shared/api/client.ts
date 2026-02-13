@@ -58,7 +58,7 @@ export async function apiFetch<T>(
   const { accessToken } = useSession.getState();
 
   const headers = new Headers(init.headers);
-  if (!headers.has("Content-Type") && init.body) headers.set("Content-Type", "application/json");
+  if (!headers.has("Content-Type") && init.body && !(init.body instanceof FormData)) headers.set("Content-Type", "application/json");
   if (opts.auth !== false && accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
 
   const res = await fetch(`${BASE}${path}`, { ...init, headers, credentials: "include" });
@@ -71,7 +71,7 @@ export async function apiFetch<T>(
 
     const { accessToken: newAccess } = useSession.getState();
     const headers2 = new Headers(init.headers);
-    if (!headers2.has("Content-Type") && init.body) headers2.set("Content-Type", "application/json");
+    if (!headers2.has("Content-Type") && init.body && !(init.body instanceof FormData)) headers2.set("Content-Type", "application/json");
     if (opts.auth !== false && newAccess) headers2.set("Authorization", `Bearer ${newAccess}`);
 
     const res2 = await fetch(`${BASE}${path}`, { ...init, headers: headers2, credentials: "include" });

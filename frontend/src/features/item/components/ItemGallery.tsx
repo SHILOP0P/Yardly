@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { ItemImage } from "@/shared/api/types";
+import { resolveMediaUrl } from "@/shared/api/media";
 
 export function ItemGallery({ images }: { images: ItemImage[] }) {
   const [idx, setIdx] = useState(0);
@@ -13,7 +14,7 @@ export function ItemGallery({ images }: { images: ItemImage[] }) {
     <div className="space-y-3">
       <div className="border rounded-xl overflow-hidden">
         {/* пока просто <img> по url */}
-        <img src={main.url} alt="" className="w-full h-80 object-cover" />
+        <img src={resolveMediaUrl(main.url)} alt="" className="w-full h-80 object-cover" />
       </div>
 
       <div className="flex gap-2 overflow-auto">
@@ -24,7 +25,7 @@ export function ItemGallery({ images }: { images: ItemImage[] }) {
             className={`border rounded-lg overflow-hidden w-20 h-20 flex-shrink-0 ${i === idx ? "opacity-100" : "opacity-60"}`}
             title={im.sort_order === 1 ? "Основная" : ""}
           >
-            <img src={im.url} alt="" className="w-full h-full object-cover" />
+            <img src={resolveMediaUrl(im.url)} alt="" className="w-full h-full object-cover" />
           </button>
         ))}
       </div>

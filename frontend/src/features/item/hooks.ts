@@ -1,10 +1,10 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { itemsApi } from "@/shared/api/endpoints/items";
+import { itemsApi, type ItemListParams } from "@/shared/api/endpoints/items";
 
-export function useItemsList(mode?: any) {
+export function useItemsList(params?: ItemListParams) {
   return useQuery({
-    queryKey: ["items", "list", mode ?? null],
-    queryFn: () => itemsApi.list(mode ? { mode } : undefined),
+    queryKey: ["items", "list", params ?? null],
+    queryFn: () => itemsApi.list(params),
   });
 }
 
@@ -27,7 +27,7 @@ export function useItemImages(itemId: number) {
 export function useAddItemImage(itemId: number) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (url: string) => itemsApi.images.add(itemId, url),
+    mutationFn: (file: File) => itemsApi.images.add(itemId, file),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["items", itemId, "images"] }),
   });
 }
