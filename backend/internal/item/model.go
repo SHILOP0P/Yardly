@@ -32,14 +32,21 @@ type ItemImage struct {
 }
 
 type Item struct {
-	ID     int64  `json:"id"`
-	OwnerID int64 `json:"owner_id"`
-	Title  string `json:"title"`
-	Status Status `json:"status"`
-	Mode   DealMode `json:"mode"`
+	ID      int64    `json:"id"`
+	OwnerID int64    `json:"owner_id"`
+	Title   string   `json:"title"`
+	Status  Status   `json:"status"`
+	Mode    DealMode `json:"mode"`
+
+	Description string `json:"description,omitempty"`
+	Price       int64  `json:"price,omitempty"`   // копейки/центы, чтобы без float
+	Deposit     int64  `json:"deposit,omitempty"`
+	Location    string `json:"location,omitempty"`
+	Category    string `json:"category,omitempty"`
 
 	Images []ItemImage `json:"images,omitempty"`
 }
+
 
 
 func (s Status) Valid() bool {

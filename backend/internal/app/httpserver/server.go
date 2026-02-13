@@ -3,6 +3,7 @@ package httpserver
 import (
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	bookingpg "github.com/SHILOP0P/Yardly/backend/internal/booking/pgrepo"
@@ -16,24 +17,21 @@ import (
 
 	"github.com/SHILOP0P/Yardly/backend/internal/auth"
 	"github.com/SHILOP0P/Yardly/backend/internal/booking"
-	"github.com/SHILOP0P/Yardly/backend/internal/item"
 	"github.com/SHILOP0P/Yardly/backend/internal/favorite"
 	"github.com/SHILOP0P/Yardly/backend/internal/httpx"
+	"github.com/SHILOP0P/Yardly/backend/internal/item"
 )
 
-
-
-func New(port string, pool *pgxpool.Pool,itemsRepo *itempg.Repo, bookingRepo *bookingpg.Repo, userRepo *userpg.Repo, refreshesRepo *auth.RefreshRepo, favoriteRepo favorite.Repo, adminRepo admin.Repo, jwtSvc *auth.JWT, refreshTTL time.Duration) *http.Server{
+func New(port string, pool *pgxpool.Pool, itemsRepo *itempg.Repo, bookingRepo *bookingpg.Repo, userRepo *userpg.Repo, refreshesRepo *auth.RefreshRepo, favoriteRepo favorite.Repo, adminRepo admin.Repo, jwtSvc *auth.JWT, refreshTTL time.Duration) *http.Server {
 	mux := http.NewServeMux()
 
 	RegisterBaseRotes(mux)
 
 	authMw := auth.Middleware(jwtSvc, userRepo)
 
-	protectedChain := func (h http.Handler) http.Handler{
+	protectedChain := func(h http.Handler) http.Handler {
 		return authMw(auth.RequireNotBanned(h))
 	}
-
 
 	adminChain := func(h http.Handler) http.Handler {
 		return authMw(auth.RequireNotBanned(auth.RequireAdmin(h)))
@@ -51,19 +49,24 @@ func New(port string, pool *pgxpool.Pool,itemsRepo *itempg.Repo, bookingRepo *bo
 	admin.RegisterRoutes(mux, adminRepo, adminChain)
 
 	return &http.Server{
-		Addr: ":" + port,
+		Addr:    ":" + port,
 		Handler: httpx.CORS(mux),
 	}
 }
 
-func RegisterBaseRotes(mux *http.ServeMux){
+func RegisterBaseRotes(mux *http.ServeMux) {
+	uploadsDir := os.Getenv("UPLOADS_DIR")
+	if uploadsDir == "" {
+		uploadsDir = "uploads"
+	}
+	mux.Handle("GET /uploads/", http.StripPrefix("/uploads/", http.FileServer(http.Dir(uploadsDir))))
+
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "Hello from Yardly")
 	})
-	
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request){
+
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, "OK")
 	})
 }
-
