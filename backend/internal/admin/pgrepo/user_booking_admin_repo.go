@@ -162,25 +162,27 @@ FOR UPDATE
 	if req.Ban != nil {
 		if *req.Ban {
 			const q = `
-UPDATE users
-SET banned_at=now(),
-    ban_reason=$2,
-    ban_expires_at=$3,
-    updated_at=now()
-WHERE id=$1
-`
+			UPDATE users
+			SET banned_at=now(),
+				ban_reason=$2,
+				ban_expires_at=$3,
+				token_version = token_version + 1,
+				updated_at=now()
+			WHERE id=$1
+			`
 			if _, err := tx.Exec(ctx, q, targetUserID, req.BanReason, req.BanExpiresAt); err != nil {
 				return admin.UserListItem{}, fmt.Errorf("admin patch user ban: %w", err)
 			}
 		} else {
 			const q = `
-UPDATE users
-SET banned_at=NULL,
-    ban_reason=NULL,
-    ban_expires_at=NULL,
-    updated_at=now()
-WHERE id=$1
-`
+			UPDATE users
+			SET banned_at=NULL,
+				ban_reason=NULL,
+				ban_expires_at=NULL,
+				token_version = token_version + 1,
+				updated_at=now()
+			WHERE id=$1
+			`
 			if _, err := tx.Exec(ctx, q, targetUserID); err != nil {
 				return admin.UserListItem{}, fmt.Errorf("admin patch user unban: %w", err)
 			}

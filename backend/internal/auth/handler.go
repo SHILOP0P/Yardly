@@ -37,14 +37,18 @@ type loginResponse struct {
 
 
 type AuthUser struct {
-	ID     int64
-	Role   Role
-	Banned bool
+    ID           int64
+    Role         Role
+    Banned       bool
+    TokenVersion int64
 }
+
 
 type UserAuthenticator interface {
 	Authenticate(ctx context.Context, email, password string) (AuthUser, error)
 	GetByIDForAuth(ctx context.Context, id int64) (AuthUser, error)
+
+	BumpTokenVersion(ctx context.Context, id int64) error
 }
 
 
@@ -82,7 +86,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request){
 	}
 
 
-	tok, err := h.jwt.Mint(au.ID, au.Role, au.Banned)
+	tok, err := h.jwt.Mint(au.ID, au.Role, au.TokenVersion)
 	if err != nil {
 		log.Println("Error minting token:", err)
 		httpx.WriteError(w, http.StatusInternalServerError, "could not mint token")
@@ -160,7 +164,7 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request){
 	}
 
 
-	accessTok, err := h.jwt.Mint(au.ID, au.Role, au.Banned)
+	accessTok, err := h.jwt.Mint(au.ID, au.Role, au.TokenVersion)
 	if err!=nil{
 		httpx.WriteError(w, http.StatusInternalServerError, "could not mint token")
 		return
@@ -190,7 +194,18 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request){
 		httpx.WriteError(w, http.StatusInternalServerError, "could not revoke refresh token")
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+
+	userID, ok := UserIDFromContext(r.Context())
+	if ok {
+		 if err := h.users.BumpTokenVersion(r.Context(), userID); err != nil {
+            httpx.WriteError(w, http.StatusInternalServerError, "could not logout")
+            return
+        }
+	}
+
+	secure := r.TLS != nil
+	clearRefreshCookie(w, secure)
+    w.WriteHeader(http.StatusNoContent)
 }
 
 
@@ -208,9 +223,13 @@ func (h *Handler) LogoutAll(w http.ResponseWriter, r *http.Request){
 		return
 	}
 
+	if err := h.users.BumpTokenVersion(r.Context(), userID); err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not revoke sessions")
+		return
+	}
+
 	secure := r.TLS != nil
 	clearRefreshCookie(w, secure)
-	
 	w.WriteHeader(http.StatusNoContent)
 }
 

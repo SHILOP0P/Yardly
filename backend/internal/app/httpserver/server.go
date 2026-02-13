@@ -28,7 +28,7 @@ func New(port string, pool *pgxpool.Pool,itemsRepo *itempg.Repo, bookingRepo *bo
 
 	RegisterBaseRotes(mux)
 
-	authMw := auth.Middleware(jwtSvc)
+	authMw := auth.Middleware(jwtSvc, userRepo)
 
 	protectedChain := func (h http.Handler) http.Handler{
 		return authMw(auth.RequireNotBanned(h))

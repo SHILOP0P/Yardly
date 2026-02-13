@@ -65,7 +65,7 @@ func (r *Repo) CreateWithProfile(ctx context.Context, u *user.User, p *user.Prof
 
 func (r *Repo) GetByEmail(ctx context.Context, email string) (user.User, error){
 	const q = `
-	SELECT id, email, password_hash, role, banned_at, ban_expires_at, ban_reason, created_at, updated_at
+	SELECT id, email, password_hash, role, token_version, banned_at, ban_expires_at, ban_reason, created_at, updated_at
 	FROM users
 	WHERE email = $1
 	`
@@ -75,6 +75,7 @@ func (r *Repo) GetByEmail(ctx context.Context, email string) (user.User, error){
 		&u.Email,
 		&u.PasswordHash,
 		&u.Role,
+		&u.TokenVersion,
 		&u.BannedAt, 
 		&u.BanExpiresAt,
 		&u.BanReason,
@@ -93,7 +94,7 @@ func (r *Repo) GetByEmail(ctx context.Context, email string) (user.User, error){
 func (r *Repo) GetByID(ctx context.Context, id int64)(user.User, user.Profile, error){
 	const q = `
 	SELECT
-		u.id, u.email, u.role, u.banned_at, u.ban_expires_at, u.ban_reason, u.created_at, u.updated_at,
+		u.id, u.email, u.role, u.token_version, u.banned_at, u.ban_expires_at, u.ban_reason, u.created_at, u.updated_at,
 		p.first_name, p.last_name, p.birth_date, p.gender, p.avatar_url, p.updated_at
 	FROM users u
 	JOIN user_profiles p ON p.user_id = u.id
@@ -102,7 +103,7 @@ func (r *Repo) GetByID(ctx context.Context, id int64)(user.User, user.Profile, e
 	var u user.User
 	var p user.Profile
 	err:=r.pool.QueryRow(ctx, q, id).Scan(
-		&u.ID, &u.Email, &u.Role, &u.BannedAt, &u.BanExpiresAt, &u.BanReason, &u.CreatedAt, &u.UpdatedAt,
+		&u.ID, &u.Email, &u.Role, &u.TokenVersion, &u.BannedAt, &u.BanExpiresAt, &u.BanReason, &u.CreatedAt, &u.UpdatedAt,
 		&p.FirstName, &p.LastName, &p.BirthDate, &p.Gender, &p.AvatarURL, &p.UpdatedAt,
 	)
 	if err != nil {
@@ -132,27 +133,30 @@ func (r *Repo) Authenticate(ctx context.Context, email, password string) (auth.A
 	banned := isBanned(u.BannedAt, u.BanExpiresAt, now)
 
 	return auth.AuthUser{
-		ID:     u.ID,
-		Role:   auth.Role(u.Role),
-		Banned: banned,
+		ID:           u.ID,
+		Role:         auth.Role(u.Role),
+		Banned:       banned,        // можно оставить, но дальше ты от него уйдёшь
+		TokenVersion: u.TokenVersion,
 	}, nil
+
 }
 
 
 func (r *Repo) GetByIDForAuth(ctx context.Context, id int64) (auth.AuthUser, error) {
 	const q = `
-	SELECT id, role, banned_at, ban_expires_at
+	SELECT id, role, token_version, banned_at, ban_expires_at
 	FROM users
 	WHERE id = $1
 	`
 
 	var userID int64
 	var role user.Role
+	var tokenVersion int64
 	var bannedAt *time.Time
 	var bannedExpiresAt *time.Time
 	var banned bool
 
-	err := r.pool.QueryRow(ctx, q, id).Scan(&userID, &role, &bannedAt, &bannedExpiresAt)
+	err := r.pool.QueryRow(ctx, q, id).Scan(&userID, &role, &tokenVersion, &bannedAt, &bannedExpiresAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return auth.AuthUser{}, user.ErrNotFound
@@ -168,6 +172,7 @@ func (r *Repo) GetByIDForAuth(ctx context.Context, id int64) (auth.AuthUser, err
 		ID:     userID,
 		Role:   auth.Role(role),
 		Banned: banned,
+		TokenVersion: tokenVersion,
 	}, nil
 }
 
@@ -185,4 +190,31 @@ func isBanned(bannedAt, banExpiresAt *time.Time, now time.Time) bool {
 
 	// Временный бан: активен, пока now < banExpiresAt
 	return now.Before(*banExpiresAt)
+}
+
+
+func (r *Repo) GetAccessState(ctx context.Context, userID int64)(int64, bool, error){
+	const q = `
+    SELECT token_version, banned_at, ban_expires_at
+    FROM users
+    WHERE id = $1
+    `
+    var tv int64
+    var bannedAt, banExpiresAt *time.Time
+    if err := r.pool.QueryRow(ctx, q, userID).Scan(&tv, &bannedAt, &banExpiresAt); err != nil {
+        if errors.Is(err, pgx.ErrNoRows) {
+            return 0, false, user.ErrNotFound
+        }
+        return 0, false, err
+    }
+
+	now := time.Now().UTC()
+    banned := isBanned(bannedAt, banExpiresAt, now)
+    return tv, banned, nil
+}
+
+func (r *Repo) BumpTokenVersion(ctx context.Context, userID int64) error {
+    const q = `UPDATE users SET token_version = token_version + 1, updated_at = now() WHERE id = $1`
+    _, err := r.pool.Exec(ctx, q, userID)
+    return err
 }

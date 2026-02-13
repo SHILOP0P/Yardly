@@ -13,6 +13,6 @@ func RegisterRoutes(mux *http.ServeMux, jwtSvc *JWT, refreshesRepo *RefreshRepo,
 	mux.HandleFunc("POST /api/auth/login", h.Login)
 
 	mux.HandleFunc("POST /api/auth/refresh", h.Refresh)
-	mux.HandleFunc("POST /api/auth/logout", h.Logout)
+	mux.Handle("POST /api/auth/logout", authMw(http.HandlerFunc(h.Logout)))
 	mux.Handle("POST /api/auth/logout_all", authMw(http.HandlerFunc(h.LogoutAll)))
 }

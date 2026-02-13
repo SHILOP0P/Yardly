@@ -16,6 +16,7 @@ type User struct {
 	PasswordHash string    `json:"-"`
 
 	Role         Role      `json:"role"`
+	TokenVersion int64		`json:"token_version"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 	BannedAt  *time.Time `json:"banned_at,omitempty"`
